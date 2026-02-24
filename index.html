@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ICRC-21 Local Test</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .card { border: 1px solid #ccc; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; }
+        button { cursor: pointer; padding: 0.5rem 1rem; font-size: 1rem; }
+        input { padding: 0.5rem; font-size: 1rem; width: 100%; box-sizing: border-box; margin-bottom: 0.5rem; }
+        .status { margin-top: 1rem; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>ICRC-21 Test Interface</h1>
+    
+    <div class="card">
+        <h3>1. Setup & Connection</h3>
+        <p>Ensure Plug is open and unlocked. Use <code>http://127.0.0.1:8080</code> for network.</p>
+        <button id="connectBtn">Connect Plug Wallet</button>
+        <div id="connStatus" class="status">Not Connected</div>
+    </div>
+
+    <div class="card">
+        <h3>2. Actions</h3>
+        <button id="balanceBtn" disabled>Check Balance (via Local Agent)</button>
+        <div id="balanceResult" class="status">-</div>
+        <hr>
+        <h4>Standard Transfer</h4>
+        <label>Recipient:</label>
+        <input type="text" id="recipient" value="s6bzd-46mcd-mlbx5-cq2jv-m2mhx-nhj6y-erh6g-y73vq-fnfe6-zax3q-mqe">
+        <label>Amount:</label>
+        <input type="text" id="amount" value="1">
+        <button id="transferBtn" disabled>Transfer (standard)</button>
+        <div id="transferResult" class="status"></div>
+        <hr>
+        <h4>Batch Transfer (ICRC-4)</h4>
+        <p>Sends 1 token to the recipient + 1 token to yourself (2 txs).</p>
+        <button id="batchBtn" disabled>Batch Transfer (trigger consent)</button>
+        <div id="batchResult" class="status"></div>
+        <hr>
+        <h4>Consent Check (Manual)</h4>
+        <p>Checks consent message explicitly for 'icrc4_transfer_batch' method.</p>
+        <button id="consentCheckBtn" disabled>Check Consent</button>
+        <div id="consentCheckResult" class="status"></div>
+    </div>
+
+<script type="module">
+    import { Actor, HttpAgent } from "https://esm.sh/@dfinity/agent";
+    import { IDL } from "https://esm.sh/@dfinity/candid";
+    import { Principal } from "https://esm.sh/@dfinity/principal";
+
+    window.IDL = IDL;
+    window.Principal = Principal;
+
+    const canisterId = "uxrrr-q7777-77774-qaaaq-cai";
+
+    let plugActor = null;
+    let localActor = null;
+    let myPrincipal = null;
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+        try {
+            if (!window.ic || !window.ic.plug) {
+                throw new Error("Plug wallet not found!");
+            }
+
+            // Whitelist canister
+            const whitelist = [canisterId];
+            // Host for local replica
+            const host = "http://127.0.0.1:8080";
+
+            // Request connection
+            const publicKey = await window.ic.plug.requestConnect({
+                whitelist,
+                host,
+            });
+
+            if (!publicKey) {
+                throw new Error("Connection denied");
+            }
+
+            // Create Actor via Plug for standard methods
+            // We use a manual IDL factory to avoid fetching from canister if possible, or just define what we need
+            const idlFactory = ({ IDL }) => {
+                 const Account = IDL.Record({ owner: IDL.Principal, subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)) });
+                 const TransferArgs = IDL.Record({
+                    to: Account,
+                    fee: IDL.Opt(IDL.Nat),
+                    memo: IDL.Opt(IDL.Vec(IDL.Nat8)),
+                    from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+                    created_at_time: IDL.Opt(IDL.Nat64),
+                    amount: IDL.Nat,
+                });
+                const TransferResult = IDL.Variant({ Ok: IDL.Nat, Err: IDL.Variant({ BadFee : IDL.Record({ expected_fee : IDL.Nat }), BadBurn : IDL.Record({ min_burn_amount : IDL.Nat }), InsufficientFunds : IDL.Record({ balance : IDL.Nat }), TooOld : IDL.Null, CreatedInFuture : IDL.Record({ ledger_time : IDL.Nat64 }), Duplicate : IDL.Record({ duplicate_of : IDL.Nat }), TemporarilyUnavailable : IDL.Null, GenericError : IDL.Record({ message : IDL.Text, error_code : IDL.Nat }) }) });
+                
+                const TransferBatchArgs = IDL.Vec(TransferArgs);
+                const TransferBatchResult = IDL.Vec(IDL.Opt(TransferResult)); 
+                
+                // Consent Message Types
+                const ConsentMessageRequest = IDL.Record({
+                    method: IDL.Text,
+                    arg: IDL.Vec(IDL.Nat8),
+                    user_preferences: IDL.Record({
+                        metadata: IDL.Record({ language: IDL.Text, utc_offset_minutes: IDL.Opt(IDL.Int16) }),
+                        device_spec: IDL.Opt(IDL.Variant({ GenericDisplay: IDL.Null, LineDisplay: IDL.Record({ characters_per_line: IDL.Nat16, lines_per_page: IDL.Nat16 }) }))
+                    })
+                });
+                 const ConsentMessageResponse = IDL.Variant({
+                    Ok: IDL.Record({
+                        consent_message: IDL.Variant({
+                            LineDisplayMessage: IDL.Record({ pages: IDL.Vec(IDL.Record({ lines: IDL.Vec(IDL.Text) })) }),
+                            GenericDisplayMessage: IDL.Text,
+                            FieldsDisplayMessage : IDL.Vec(IDL.Record({ fieldName : IDL.Text, fieldValue : IDL.Text }))
+                        })
+                    }),
+                    Err: IDL.Variant({
+                        InternalError: IDL.Record({ msg: IDL.Text }),
+                        UnsupportedCanisterCall: IDL.Record({ errorInfo: IDL.Record({ description: IDL.Text }) })
+                    })
+                });
+
+                return IDL.Service({
+                    icrc1_balance_of: IDL.Func([Account], [IDL.Nat], ['query']),
+                    icrc1_transfer: IDL.Func([TransferArgs], [TransferResult], []),
+                    icrc4_transfer_batch: IDL.Func([TransferBatchArgs], [TransferBatchResult], []),
+                    icrc21_canister_call_consent_message: IDL.Func([ConsentMessageRequest], [ConsentMessageResponse], ['query']),
+                });
+            };
+
+            plugActor = await window.ic.plug.createActor({
+                canisterId,
+                interfaceFactory: idlFactory,
+            });
+
+            const agent = new HttpAgent({ host });
+            await agent.fetchRootKey();
+            localActor = Actor.createActor(idlFactory, { agent, canisterId });
+
+            myPrincipal = await window.ic.plug.getPrincipal(); // Principal object
+            
+            document.getElementById('connStatus').innerText = `Connected: ${myPrincipal.toText()}`;
+            document.getElementById('recipient').value = myPrincipal.toText(); // Default to self
+
+            document.getElementById('balanceBtn').disabled = false;
+            document.getElementById('transferBtn').disabled = false;
+            document.getElementById('batchBtn').disabled = false;
+            document.getElementById('consentCheckBtn').disabled = false;
+            document.getElementById('connectBtn').disabled = true;
+
+        } catch (e) {
+            console.error(e);
+            document.getElementById('connStatus').innerText = "Connection Failed: " + e.message;
+        }
+    });
+
+
+    document.getElementById('balanceBtn').addEventListener('click', async () => {
+        try {
+            // Use localActor for query - this should SUCCEED even if Plug fails verification
+            const bal = await localActor.icrc1_balance_of({ owner: myPrincipal, subaccount: [] });
+            document.getElementById('balanceResult').innerText = `${Number(bal)/100_000_000} Tokens`;
+        } catch (e) {
+            document.getElementById('balanceResult').innerText = "Query Error: " + e.message;
+        }
+    });
+
+    document.getElementById('transferBtn').addEventListener('click', async () => {
+        try {
+            const recipientStr = document.getElementById('recipient').value;
+            const amount = BigInt(Math.floor(parseFloat(document.getElementById('amount').value) * 100_000_000));
+            const recipient = Principal.fromText(recipientStr);
+
+            document.getElementById('transferResult').innerText = "Requesting approval via Plug...";
+
+            // Must use plugActor for transfer (updates state)
+            const result = await plugActor.icrc1_transfer({
+                to: { owner: recipient, subaccount: [] },
+                amount: amount,
+                fee: [], memo: [], from_subaccount: [], created_at_time: []
+            });
+
+            document.getElementById('transferResult').innerText = JSON.stringify(result, (_, v) => typeof v === 'bigint' ? v.toString() : v);
+        } catch (e) {
+             console.error(e);
+             document.getElementById('transferResult').innerText = "Transfer Error: " + e.message;
+        }
+    });
+
+    document.getElementById('batchBtn').addEventListener('click', async () => {
+        try {
+            const recipientStr = document.getElementById('recipient').value;
+            const amount = BigInt(Math.floor(parseFloat(document.getElementById('amount').value) * 100_000_000));
+            const recipient = Principal.fromText(recipientStr);
+
+            document.getElementById('batchResult').innerText = "Requesting BATCH approval via Plug...";
+
+            // Create batch arguments
+            // 1. Transfer to recipient
+            // 2. Transfer to self (loopback)
+            const batchArgs = [
+                {
+                    to: { owner: recipient, subaccount: [] },
+                    amount: amount,
+                    fee: [], memo: [], from_subaccount: [], created_at_time: []
+                },
+                {
+                    to: { owner: myPrincipal, subaccount: [] },
+                    amount: amount,
+                    fee: [], memo: [], from_subaccount: [], created_at_time: []
+                }
+            ];
+
+            // Must use plugActor
+            const result = await plugActor.icrc4_transfer_batch(batchArgs);
+
+            document.getElementById('batchResult').innerText = JSON.stringify(result, (_, v) => typeof v === 'bigint' ? v.toString() : v);
+        } catch (e) {
+             console.error(e);
+             document.getElementById('batchResult').innerText = "Batch Error: " + e.message;
+        }
+    });
+    document.getElementById('consentCheckBtn').addEventListener('click', async () => {
+        const resultEl = document.getElementById('consentCheckResult');
+        resultEl.innerText = "Checking consent for ICRC-4 Batch Transfer...";
+        try {
+            // CONSTRUCT ARGUMENTS FOR ICRC4_TRANSFER_BATCH manually
+            // We need to match the IDL signature: vec TransferArgs
+            const recipientStr = document.getElementById('recipient').value;
+            const amount = BigInt(Math.floor(parseFloat(document.getElementById('amount').value) * 100_000_000));
+            const recipient = Principal.fromText(recipientStr);
+            
+            // Reconstruct the types locally to encode
+            const Account = IDL.Record({ owner: IDL.Principal, subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)) });
+            const TransferArgs = IDL.Record({
+                to: Account,
+                fee: IDL.Opt(IDL.Nat),
+                memo: IDL.Opt(IDL.Vec(IDL.Nat8)),
+                from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+                created_at_time: IDL.Opt(IDL.Nat64),
+                amount: IDL.Nat,
+            });
+            const TransferBatchArgs = IDL.Vec(TransferArgs); // The expected argument type
+
+            // Create the payload
+             const batchArgs = [
+                {
+                    to: { owner: recipient, subaccount: [] },
+                    amount: amount,
+                    fee: [], memo: [], from_subaccount: [], created_at_time: []
+                },
+                {
+                    to: { owner: myPrincipal, subaccount: [] },
+                    amount: amount,
+                    fee: [], memo: [], from_subaccount: [], created_at_time: []
+                }
+            ];
+            
+            // Encode arguments to blob
+            const encodedArgs = IDL.encode([TransferBatchArgs], [batchArgs]);
+            
+            const method = "icrc4_transfer_batch"; // The method we want to test consent for
+            
+            const request = {
+                method: method,
+                arg: new Uint8Array(encodedArgs),
+                user_preferences: {
+                    metadata: { language: "en", utc_offset_minutes: [] },
+                    device_spec: []
+                }
+            };
+            
+            console.log("Requesting consent message for", method, request);
+            
+            // Call icrc21_canister_call_consent_message
+            const response = await localActor.icrc21_canister_call_consent_message(request);
+            console.log("Consent Response:", response);
+            
+            if ('Ok' in response) {
+                const info = response.Ok;
+                let msgText = "";
+                if ('GenericDisplayMessage' in info.consent_message) {
+                    msgText = info.consent_message.GenericDisplayMessage;
+                } else if ('FieldsDisplayMessage' in info.consent_message) {
+                    msgText = "Fields: " + JSON.stringify(info.consent_message.FieldsDisplayMessage);
+                }
+                resultEl.innerText = `Success:\n${msgText}`;
+             } else {
+                 resultEl.innerText = `Error: ${JSON.stringify(response.Err)}`;
+             }
+
+        } catch (e) {
+            console.error(e);
+            resultEl.innerText = `Error: ${e.message}`;
+        }
+    });
+
+</script>
+</body>
+</html>

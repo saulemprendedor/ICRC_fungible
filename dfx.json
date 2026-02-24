@@ -1,0 +1,85 @@
+{
+    "version": 1,
+    "canisters": {
+        
+        "token": {
+          "type": "motoko",
+          "main": "src/Token.mo",
+          "gzip": true,
+          "args": "-v --incremental-gc"
+        },
+        "token-mixin": {
+          "type": "motoko",
+          "main": "src/token-mixin.mo",
+          "gzip": true,
+          "args": "-v --incremental-gc"
+        },
+        "token_icrc85": {
+          "type": "motoko",
+          "main": "pic/TokenWithICRC85.mo",
+          "gzip": true,
+          "args": "-v --incremental-gc"
+        },
+        "dummy_collector": {
+          "type": "motoko",
+          "main": "pic/DummyCollector.mo",
+          "gzip": true,
+          "args": "-v --incremental-gc"
+        },
+        "prodtoken": {
+          "type": "motoko",
+          "gzip": true,
+          "main": "src/Token.mo",
+          "args": "--incremental-gc --release"
+        },
+        "rosetta_test_token": {
+          "type": "motoko",
+          "gzip": true,
+          "main": "src/Token.mo",
+          "args": "--incremental-gc --release"
+        },
+        "allowlist": {
+          "type": "motoko",
+          "main": "src/examples/Allowlist.mo",
+          "args": "-v --incremental-gc"
+        },
+        "lotto": {
+          "type": "motoko",
+          "main": "src/examples/Lotto.mo",
+          "args": "-v --incremental-gc"
+        },
+        "lotto_interface": {
+          "type": "motoko",
+          "main": "src/examples/LottoInterface.mo",
+          "args": "-v --incremental-gc"
+        },
+        "allowlist_interface": {
+          "type": "motoko",
+          "main": "src/examples/AllowlistInterface.mo",
+          "args": "-v --incremental-gc"
+        },
+         "sns": {
+          "type": "motoko",
+          "main": "src/snstest.mo",
+          "args": "-v --incremental-gc",
+          "gzip": true
+        }
+    },
+    "defaults": {
+        "build": {
+            "packtool": "mops sources",
+            "args": ""
+        },
+        "replica": {
+          "subnet_type": "system"
+      }
+    },
+    "networks": {
+        "local": {
+            "bind": "127.0.0.1:8887",
+            "type": "ephemeral"
+        }
+      }
+
+    
+}

@@ -1,0 +1,48 @@
+type ShareNotification = 
+ record {
+   actions: nat;
+   caller: principal;
+   cycles_received: nat;
+   namespace: text;
+   timestamp: int;
+ };
+type ShareArgs = 
+ vec record {
+       text;
+       nat;
+     };
+type DummyCollector = 
+ service {
+   /// Get the most recent notification
+   get_last_notification: () -> (opt ShareNotification) query;
+   /// Get notification count
+   get_notification_count: () -> (nat) query;
+   /// Get all notifications for testing verification
+   get_notifications: () -> (vec ShareNotification) query;
+   /// Get notifications by namespace
+   get_notifications_by_namespace: (namespace: text) ->
+    (vec ShareNotification) query;
+   /// Get stats summary
+   get_stats: () ->
+    (record {
+       notification_count: nat;
+       total_cycles: nat;
+       total_notifications: nat;
+     }) query;
+   /// Get total cycles received
+   get_total_cycles: () -> (nat) query;
+   /// ICRC-85 deposit cycles with async response
+   icrc85_deposit_cycles: (request: ShareArgs) ->
+    (variant {
+       Err: text;
+       Ok: nat;
+     });
+   /// ICRC-85 deposit cycles notification (one-way, no response)
+   icrc85_deposit_cycles_notify: (request: ShareArgs) -> () oneway;
+   /// Reset all data (for test cleanup)
+   reset: () -> ();
+ };
+/// ICRC-85 Dummy Collector Canister
+/// This canister receives ICRC-85 cycle share notifications for testing purposes.
+/// It tracks all received notifications and cycles for verification.
+service : () -> DummyCollector

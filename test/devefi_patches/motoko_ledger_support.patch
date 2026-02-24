@@ -1,0 +1,150 @@
+--- common.ts.backup	2026-01-23 12:34:32
++++ common.ts	2026-01-23 13:34:10
+@@ -8,6 +8,8 @@
+ import { _SERVICE as PassbackService, idlFactory as PassbackIdlFactory, init as passbackInit } from './build/passback.idl.js';
+ import { _SERVICE as ICRCLedgerService, idlFactory as ICRCLedgerIdlFactory, init as icrcInit, LedgerArg as ICRCLedgerArg, GetTransactionsRequest, GetTransactionsResponse, Transaction as ICRCTransaction, Account } from './icrc_ledger/ledger.idl.js';
+ import { _SERVICE as ICPLedgerService, idlFactory as ICPLedgerIdlFactory, init as icpInit, LedgerCanisterPayload as ICPLedgerCanisterPayload, QueryBlocksResponse, Block as ICPBlock, Transaction as ICPTransaction } from './icp_ledger/ledger.idl';
++// Motoko ICRC_fungible ledger support
++import { idlFactory as MotokoLedgerIdlFactory, init as motokoInit } from './icrc_ledger/motoko_ledger.idl.js';
+ import { _SERVICE as CycleWalletService, idlFactory as CycleWalletIdlFactory, init as cycleWalletInit } from './build/cycle_wallet.idl.js';
+ import { _SERVICE as NTCService, idlFactory as NTCIdlFactory, init as ntcInit } from './build/NTC.idl.js';
+ import { _SERVICE as NTCCHAT_SERVICE, idlFactory as NTCCHAT_IDL_FACTORY, init as ntcchat_init } from './build/ntcchat.idl.js';
+@@ -25,6 +27,8 @@
+ export const CYCLE_WALLET_WASM_PATH = resolve(__dirname, "./build/cycle_wallet.wasm");
+ export const NTCCHAT_WASM_PATH = resolve(__dirname, "./build/ntcchat.wasm");
+ export const LEDGER_TYPE = process.env['LEDGER_TYPE'] as "icrc" | "icp";
++// Support for multiple ledger implementations: "dfinity" (default) or "motoko"
++export const LEDGER_IMPL = process.env['LEDGER'] as "dfinity" | "motoko" | undefined;
+ 
+ export {toState};
+ 
+@@ -122,9 +126,10 @@
+ 
+ 
+ let ICRC_WASM_PATH = resolve(__dirname, "./icrc_ledger/ledger.wasm");
+-if (process.env['LEDGER'] === "motoko") {
++let MOTOKO_WASM_PATH = resolve(__dirname, "./icrc_ledger/motoko_ledger.wasm");
++
++if (LEDGER_IMPL === "motoko") {
+     console.log("🚀🦀 USING MOTOKO LEDGER - BRACE FOR IMPACT! 💥🦑");
+-    ICRC_WASM_PATH = resolve(__dirname, "./icrc_ledger/motoko_ledger.wasm");
+ }
+ 
+ let ICP_WASM_PATH = resolve(__dirname, "./icp_ledger/ledger.wasm");
+@@ -162,12 +167,88 @@
+ 
+     return ledger_args;
+     }
++
++// Init args for Motoko ICRC_fungible token (PanIndustrial)
++function get_motoko_args(me: Principal): any {
++    // Note: outer [[{...}]] because init arg is opt(record)
++    // [value] = Some, [] = None for opt types
++    const initArgs: any = [[{
++        icrc1: [{
++            fee: [{ Fixed: 10000n }],
++            advanced_settings: [] as never[],
++            max_memo: [80n],
++            decimals: 8,
++            metadata: [] as never[],
++            minting_account: [{ owner: me, subaccount: [] as never[] }],
++            logo: [] as never[],
++            permitted_drift: [] as never[],
++            name: ["Test Coin"],
++            settle_to_accounts: [] as never[],
++            fee_collector: [] as never[],
++            transaction_window: [] as never[],
++            min_burn_amount: [] as never[],
++            max_supply: [] as never[],
++            max_accounts: [] as never[],
++            symbol: ["tCOIN"],
++        }],
++        icrc2: [{
++            fee: [{ ICRC1: null as null }],
++            advanced_settings: [] as never[],
++            max_allowance: [{ TotalSupply: null as null }],
++            max_approvals: [10_000_000n],
++            max_approvals_per_account: [10_000n],
++            settle_to_approvals: [9_990_000n],
++        }],
++        icrc3: {
++            maxRecordsToArchive: 3000n,
++            archiveIndexType: { Stable: null as null },
++            maxArchivePages: 62500n,
++            settleToRecords: 2000n,
++            archiveCycles: 2_000_000_000_000n,
++            maxActiveRecords: 4000n,
++            maxRecordsInArchiveInstance: 10_000_000n,
++            archiveControllers: [] as never[],
++            supportedBlocks: [
++                { block_type: "1burn", url: "https://github.com/dfinity/ICRC-1/tree/main/standards/ICRC-3" },
++                { block_type: "1mint", url: "https://github.com/dfinity/ICRC-1/tree/main/standards/ICRC-3" },
++                { block_type: "2approve", url: "https://github.com/dfinity/ICRC-1/tree/main/standards/ICRC-3" },
++                { block_type: "1xfer", url: "https://github.com/dfinity/ICRC-1/tree/main/standards/ICRC-3" },
++                { block_type: "2xfer", url: "https://github.com/dfinity/ICRC-1/tree/main/standards/ICRC-3" },
++            ],
++        },
++        icrc4: [{
++            fee: [{ ICRC1: null as null }],
++            max_balances: [200n],
++            max_transfers: [200n],
++        }],
++    }]];
++    return initArgs;
++}
+ 
+ 
+ 
+     
+ export async function ICRCLedger(pic: PocketIc, me:Principal, subnet:Principal | undefined) {
++    // Use Motoko ICRC_fungible ledger with its own init format
++    if (LEDGER_IMPL === "motoko") {
++        const fixture = await pic.setupCanister<ICRCLedgerService>({
++            //@ts-ignore - MotokoLedgerIdlFactory has compatible interface
++            idlFactory: MotokoLedgerIdlFactory,
++            wasm: MOTOKO_WASM_PATH,
++            arg: IDL.encode(motokoInit({ IDL }), get_motoko_args(me)),
++            ...subnet ? { targetSubnetId: subnet } : {},
++        });
++        await pic.addCycles(fixture.canisterId, 100_000_000_000_000_000);
++        
++        // Return with DFINITY-compatible IDL factory for middleware compatibility
++        const proxyActor = pic.createActor<ICRCLedgerService>(ICRCLedgerIdlFactory, fixture.canisterId);
++        return {
++            canisterId: fixture.canisterId,
++            actor: proxyActor
++        };
++    }
+ 
++    // Default: Use DFINITY ICRC ledger
+     const fixture = await pic.setupCanister<ICRCLedgerService>({
+         idlFactory: ICRCLedgerIdlFactory,
+         wasm: ICRC_WASM_PATH,
+@@ -260,20 +341,19 @@
+ export function account2aid(account: Account) {
+     return AccountIdentifier.fromPrincipal({
+         principal: account.owner,
++        //@ts-ignore
+         subAccount: account.subaccount.length > 0 ? SubAccount.fromBytes(new Uint8Array(account.subaccount[0])) : undefined 
+     });
+ }
+ 
+ // Function to register account mappings - calculates AccountIdentifier from Account
+ export function registerAccount(account: Account) {
+-    const accountIdentifier = account.subaccount.length > 0 
+-        ? AccountIdentifier.fromPrincipal({
+-            principal: account.owner,
+-            subAccount: SubAccount.fromBytes(new Uint8Array(account.subaccount[0]))
+-        })
+-        : AccountIdentifier.fromPrincipal({
+-            principal: account.owner
+-        });
++    const subAcc = account.subaccount.length > 0 ? SubAccount.fromBytes(new Uint8Array(account.subaccount[0])) : undefined;
++    const accountIdentifier = AccountIdentifier.fromPrincipal({
++        principal: account.owner,
++        //@ts-ignore
++        subAccount: subAcc instanceof Error ? undefined : subAcc
++    });
+     const key = accountIdentifier.toHex();
+     registered_accounts.set(key, account);
+ }

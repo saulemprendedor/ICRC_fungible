@@ -1,0 +1,37 @@
+{
+    "version": 1,
+    "canisters": {
+        "token": {
+          "type": "motoko",
+          "main": "../../src/Token.mo",
+          "args": "-v --incremental-gc"
+        },
+        "token-mixin": {
+          "type": "motoko",
+          "main": "../../src/token-mixin.mo",
+          "args": "-v --incremental-gc --legacy-persistence"
+        },
+        "index": {
+          "type": "custom",
+          "wasm": "./ic-icrc1-index-ng.wasm.gz",
+          "candid": "./index-ng.did"
+        },
+        "icrc_index_mo": {
+          "type": "custom",
+          "wasm": "./icrc_index.wasm.gz",
+          "candid": "./icrc_index.did"
+        }
+    },
+    "defaults": {
+        "build": {
+            "packtool": "mops sources",
+            "args": ""
+        }
+    },
+    "networks": {
+        "local": {
+            "bind": "127.0.0.1:8887",
+            "type": "ephemeral"
+        }
+    }
+}

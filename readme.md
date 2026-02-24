@@ -1,0 +1,110 @@
+# ICRC-1, ICRC-2, and ICRC-3 Fungible Token
+
+## Overview
+This project is focused on the development and implementation of a fungible token standard, utilizing blockchain or distributed ledger technology. The core of the project is written in Motoko and is compatibility with the DFINITY Internet Computer platform.
+
+## Contents
+- `dfx.json`: Configuration file for project settings and canister definitions.
+- `mops.toml`: Dependency management file listing various Motoko libraries and tools.
+- `runners/test_deploy.sh`: Script for testing or deploying the token system.
+- `runners/prod_deploy.sh`: Script for deploying to production token system.
+- `src/Token.mo`: Source code for the token system written in Motoko.
+- `src/examples/Allowlist.mo`: Source code for the a token who is limited to an allow list of users who can send tokens, but anyone can receive them. See the source file for more information.
+- `src/examples/Lotto.mo`: Source code for a token where whenever you burn tokens you have a chance to double your tokens. See the source file for more information.
+
+## Setup and Installation
+1. **Environment Setup**: Ensure you have an environment that supports Motoko programming. This typically involves setting up the [DFINITY Internet Computer SDK](https://internetcomputer.org/docs/current/references/cli-reference/dfx-parent) and [mops tool chain](https://docs.mops.one/quick-start).
+2. **Dependency Installation**: Install the dependencies listed in `mops.toml`. `mops install`.
+3. **Configuration**: Adjust `dfx.json` and `mops.toml` according to your project's specific needs, such as changing canister settings or updating dependency versions.
+
+## Usage
+- **Development**: Modify and enhance `src/Token.mo` as per your requirements. This file contains the logic and structure of the fungible token system.
+- **Testing and Deployment**: Use `runners/test_deploy.sh` for deploying the token system to a test or development environment. This script may need modifications to fit your deployment process.
+- **Production Deployment**: Use `runners/prod_deploy.sh` for deploying the token system to a main net environment. This script will need modifications to fit your deployment process.
+
+## Dependencies
+- DFX and Mops
+- Additional dependencies are listed in `mops.toml`. Ensure they are properly installed and configured.
+
+## Contribution and Development Guidelines
+- **Coding Standards**: Adhere to established Motoko coding practices. Ensure readability and maintainability of the code.
+- **Testing**: Thoroughly test any new features or changes in a controlled environment before integrating them into the main project.
+- **Documentation**: Update documentation and comments within the code to reflect changes or additions to the project.
+
+## Migration
+- **ICRC-3**: Version v0.0.6 updates ICRC3 with the class plus syntax and initialization.  If you have previouly deployed ICRC-3 you'll need to update your syntax to match the new pattern. You should be able to use your existing icrc3_migration_state variable and it should not require any kind of migration as the data structure is the same.  To upgrade your archive canisters to include the legacy get_transaction functions you will need to implement and run the upgrade helper in the ICRC3 directory(see the icrc3-mo directory in your .mops folder after running mops install).
+
+## Testing
+
+### Running devefi_ledger_tests (PocketIC Integration Tests)
+
+The [devefi_ledger_tests](https://github.com/Neutrinomic/devefi_ledger_tests) suite provides comprehensive PocketIC-based integration tests for ICRC ledgers. These tests validate real canister behavior including transfers, burns, mints, transaction windows, and more.
+
+**Setup:**
+
+```bash
+# Clone the test repository
+git clone https://github.com/Neutrinomic/devefi_ledger_tests.git /tmp/devefi_ledger_tests
+cd /tmp/devefi_ledger_tests
+
+# Install dependencies
+npm install
+
+# Build the Motoko ledger WASM (from ICRC_fungible directory)
+cd /path/to/ICRC_fungible
+dfx build token --check
+cp .dfx/local/canisters/token/token.wasm /tmp/devefi_ledger_tests/icrc_ledger/motoko_ledger.wasm
+```
+
+**Running Tests:**
+
+```bash
+cd /tmp/devefi_ledger_tests
+
+# Run all applicable tests
+LEDGER=motoko LEDGER_TYPE=icrc npx jest --testPathIgnorePatterns="ntc.spec.ts|fastscan.spec.ts"
+
+# Run specific test file
+LEDGER=motoko LEDGER_TYPE=icrc npx jest ledger.spec.ts
+
+# Run with verbose output
+LEDGER=motoko LEDGER_TYPE=icrc npx jest --verbose
+```
+
+**Test Suites:**
+
+| Test File | Description | Status |
+|-----------|-------------|--------|
+| `ledger.spec.ts` | Core ledger operations, metadata | ✅ |
+| `basic.spec.ts` | Basic transfer scenarios | ✅ |
+| `mint.spec.ts` | Minting operations | ✅ |
+| `burn.spec.ts` | Burn operations | ✅ |
+| `tx_window.spec.ts` | Transaction window/deduplication | ✅ |
+| `noise.spec.ts` | Stress testing | ✅ |
+| `dust.spec.ts` | Small amount handling | ✅ |
+| `on_sent.spec.ts` | Send callbacks | ✅ |
+| `passback.spec.ts` | Passback scenarios | ✅ |
+| `legacy_address.spec.ts` | Legacy address format | ✅ |
+| `ledger_down.spec.ts` | Ledger unavailability handling | ✅ |
+
+**Skipped Tests (Not Applicable):**
+
+| Test File | Reason |
+|-----------|--------|
+| `ntc.spec.ts` | Tests NTC minter canister (not a ledger test) - requires minter-specific methods like `get_queue`, `get_dropped`, `stats` |
+| `fastscan.spec.ts` | Tests DFINITY Rust ledger-specific upgrade/reinstall features with fastscan WASM |
+
+**Expected Results:** 205+ tests passing across 11 test files.
+
+### DFINITY Index-ng Integration
+
+See `/test/integration/` for index-ng canister integration tests that verify block sync and transaction indexing.
+
+## Repository
+- [Project Repository](https://github.com/icdevsorg/ICRC_fungible)
+
+## License
+- MIT License
+
+## Contact
+- **Contributing**: For contributing to this project, please submit a pull request to the repository.

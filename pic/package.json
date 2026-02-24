@@ -1,0 +1,20 @@
+{
+  "name": "icrc-fungible-pic-tests",
+  "version": "1.0.0",
+  "description": "PocketIC tests for ICRC_fungible - ICRC85 cycle share tests",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:icrc85": "vitest run --testNamePattern icrc85"
+  },
+  "devDependencies": {
+    "@dfinity/pic": "^0.18.0",
+    "@icp-sdk/core": "^5.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@dfinity/identity": "^3.4.3"
+  }
+}

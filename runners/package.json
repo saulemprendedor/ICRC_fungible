@@ -1,0 +1,27 @@
+{
+  "name": "icrc-fungible-runners",
+  "version": "1.0.0",
+  "description": "Migration and deployment scripts for ICRC_fungible",
+  "type": "module",
+  "scripts": {
+    "extract:cycleshare": "npx tsx extract_blocks.ts cycleshare",
+    "extract:icdevs": "npx tsx extract_blocks.ts icdevs",
+    "extract:all": "npx tsx extract_blocks.ts all",
+    "validate:cycleshare": "npx tsx validate_blocks.ts cycleshare",
+    "validate:icdevs": "npx tsx validate_blocks.ts icdevs",
+    "validate:all": "npx tsx validate_blocks.ts all",
+    "prepare:cycleshare": "npx tsx prepare_replay.ts cycleshare",
+    "prepare:icdevs": "npx tsx prepare_replay.ts icdevs",
+    "prepare:all": "npx tsx prepare_replay.ts all"
+  },
+  "dependencies": {
+    "@dfinity/agent": "^2.2.0",
+    "@dfinity/candid": "^2.2.0",
+    "@dfinity/principal": "^2.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.0.0"
+  }
+}

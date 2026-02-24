@@ -1,0 +1,35 @@
+[dependencies]
+core = "2.0.0"
+icrc1-mo = "0.2.0"
+icrc2-mo = "0.2.0"
+icrc3-mo = "0.4.0"
+icrc4-mo = "0.2.0"
+ic-certification = "1.1.0"
+class-plus = "0.2.0"
+timer-tool = "0.2.0"
+star = "0.1.1"
+
+[dev-dependencies]
+test = "2.1.2"
+fuzz = "1.0.0"
+matchers = "2.1.0"
+
+[package]
+name = "icrc-fungible"
+version = "0.2.0"
+description = "ICRC1, ICRC2, ICRC3, ICRC4, and ICRC10 fungible token for motoko"
+repository = "https://github.com/icdevsorg/ICRC_fungible"
+keywords = [
+  "icrc2",
+  "icrc1",
+  "icrc3",
+  "icrc4",
+  "icrc10",
+  "fungible",
+  "token",
+  "standard"
+]
+
+[toolchain]
+moc = "1.1.0"
+pocket-ic = "12.0.0"

@@ -1,0 +1,217 @@
+type Value = 
+ variant {
+   Array: vec Value;
+   Blob: blob;
+   Int: int;
+   Map: vec record {
+              text;
+              Value;
+            };
+   Nat: nat;
+   Nat64: nat64;
+   Text: text;
+ };
+type UpgradeArg = 
+ record {
+   icrc85_collector: opt principal;
+   ledger_id: opt principal;
+   retrieve_blocks_from_ledger_interval_seconds: opt nat64;
+ };
+type Transfer = 
+ record {
+   amount: Tokens;
+   created_at_time: opt nat64;
+   fee: opt Tokens;
+   from: Account;
+   memo: opt blob;
+   spender: opt Account;
+   to: Account;
+ };
+type TransactionWithId = 
+ record {
+   id: BlockIndex;
+   transaction: Transaction;
+ };
+type Transaction = 
+ record {
+   approve: opt Approve;
+   burn: opt Burn;
+   fee_collector: opt FeeCollector;
+   kind: text;
+   mint: opt Mint;
+   timestamp: nat64;
+   transfer: opt Transfer;
+ };
+type Tokens = nat;
+type SubAccount = blob;
+type Status = record {num_blocks_synced: nat64;};
+type Stats = 
+ record {
+   cycles_balance: nat;
+   fee_collector: opt Account;
+   fee_collector_ranges: nat;
+   get_blocks_method: opt GetBlocksMethod;
+   heap_memory: nat;
+   is_syncing: bool;
+   ledger_id: principal;
+   log_entries: nat;
+   num_accounts: nat;
+   num_blocks_synced: nat64;
+   sync_interval_seconds: nat64;
+ };
+type Mint = 
+ record {
+   amount: Tokens;
+   created_at_time: opt nat64;
+   fee: opt nat;
+   memo: opt blob;
+   to: Account;
+ };
+type ListSubaccountsArgs = 
+ record {
+   owner: principal;
+   start: opt SubAccount;
+ };
+type InitArg = 
+ record {
+   icrc85_collector: opt principal;
+   ledger_id: principal;
+   retrieve_blocks_from_ledger_interval_seconds: opt nat64;
+ };
+type IndexArg = 
+ variant {
+   Init: InitArg;
+   Upgrade: UpgradeArg;
+ };
+type ICRCIndex = 
+ service {
+   /// Get cycles balance
+   cycles: () -> (nat) query;
+   /// Get transactions for an account
+   get_account_transactions: (args: GetAccountTransactionsArgs) ->
+    (GetTransactionsResult) query;
+   /// Get blocks from the index
+   get_blocks: (request: GetBlocksRequest) -> (GetBlocksResponse) query;
+   /// Get fee collector ranges
+   get_fee_collectors_ranges: () -> (FeeCollectorRanges) query;
+   /// Get ICRC-85 statistics
+   get_icrc85_stats: () ->
+    (record {
+       activeActions: nat;
+       lastActionReported: opt nat;
+       nextCycleActionId: opt nat;
+     }) query;
+   /// Get the oldest transaction ID for an account
+   get_oldest_tx_id: (account: Account) -> (opt nat) query;
+   /// Get comprehensive statistics about the index canister
+   get_stats: () -> (Stats) query;
+   /// Handle HTTP requests (metrics, logs)
+   http_request: (request: HttpRequest) -> (HttpResponse) query;
+   /// Get the balance of an account (mirrors icrc1_balance_of)
+   icrc1_balance_of: (account: Account) -> (nat) query;
+   /// Get the principal of the ledger being indexed
+   ledger_id: () -> (principal) query;
+   /// List subaccounts for a principal
+   list_subaccounts: (args: ListSubaccountsArgs) -> (vec SubAccount) query;
+   /// Notify the index of new blocks available on the ledger
+   /// Only the ledger (token canister) can call this method
+   /// Uses best-effort messaging - checks reply deadline before processing
+   notify: (latest_block: nat) -> ();
+   /// Get the current status of the index
+   status: () -> (Status) query;
+ };
+type HttpResponse = 
+ record {
+   body: blob;
+   headers: vec HeaderField;
+   status_code: nat16;
+ };
+type HttpRequest = 
+ record {
+   body: blob;
+   headers: vec HeaderField;
+   method: text;
+   url: text;
+ };
+type HeaderField = 
+ record {
+   text;
+   text;
+ };
+type GetTransactionsResult = 
+ variant {
+   Err: GetTransactionsErr;
+   Ok: GetTransactions;
+ };
+type GetTransactionsErr = record {message: text;};
+type GetTransactions = 
+ record {
+   balance: Tokens;
+   oldest_tx_id: opt BlockIndex;
+   transactions: vec TransactionWithId;
+ };
+type GetBlocksResponse = 
+ record {
+   blocks: vec Value;
+   chain_length: nat64;
+ };
+type GetBlocksRequest = 
+ record {
+   length: nat;
+   start: nat;
+ };
+type GetBlocksMethod = 
+ variant {
+   GetBlocks;
+   ICRC3GetBlocks;
+ };
+type GetAccountTransactionsArgs = 
+ record {
+   account: Account;
+   max_results: nat;
+   start: opt BlockIndex;
+ };
+type FeeCollectorRanges = record {
+                            ranges:
+                             vec
+                              record {
+                                Account;
+                                vec record {
+                                      BlockIndex;
+                                      BlockIndex;
+                                    };
+                              };};
+type FeeCollector = 
+ record {
+   caller: opt principal;
+   fee_collector: opt Account;
+   mthd: opt text;
+   ts: opt nat64;
+ };
+type Burn = 
+ record {
+   amount: Tokens;
+   created_at_time: opt nat64;
+   fee: opt nat;
+   from: Account;
+   memo: opt blob;
+   spender: opt Account;
+ };
+type BlockIndex = nat;
+type Approve = 
+ record {
+   amount: Tokens;
+   created_at_time: opt nat64;
+   expected_allowance: opt Tokens;
+   expires_at: opt nat64;
+   fee: opt Tokens;
+   from: Account;
+   memo: opt blob;
+   spender: Account;
+ };
+type Account = 
+ record {
+   owner: principal;
+   subaccount: opt SubAccount;
+ };
+service : (init_args: opt IndexArg) -> ICRCIndex
