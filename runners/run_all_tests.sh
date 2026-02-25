@@ -308,13 +308,12 @@ run_mops_tests() {
         log_skip "icrc3.mo (directory not found)"
     fi
     
-    # ICRC4.mo mops tests - uses ActorTest naming, not *.test.mo
+    # ICRC4.mo mops tests
     if [ -d "$ICRC4_DIR" ]; then
-        # Check if there are actual *.test.mo files
-        if find "$ICRC4_DIR/tests" -name "*.test.mo" 2>/dev/null | grep -q .; then
+        if find "$ICRC4_DIR/test" -name "*.test.mo" 2>/dev/null | grep -q .; then
             run_test "ICRC4.mo mops test" "$ICRC4_DIR" "mops test" || true
         else
-            log_skip "ICRC4.mo mops test (uses ActorTest runner instead)"
+            log_skip "ICRC4.mo mops test (no *.test.mo files found)"
         fi
     else
         log_skip "ICRC4.mo (directory not found)"
@@ -366,6 +365,16 @@ run_pic_tests() {
         run_test "icrc3.mo PocketIC" "$ICRC3_DIR/pic" "npx vitest run --reporter=basic" || true
     else
         log_skip "icrc3.mo PocketIC (not configured)"
+    fi
+    
+    # ICRC4.mo PocketIC tests
+    if [ -d "$ICRC4_DIR/pic" ] && [ -f "$ICRC4_DIR/pic/package.json" ]; then
+        log_subsection "ICRC4.mo PocketIC tests"
+        cd "$ICRC4_DIR/pic"
+        npm install --silent 2>/dev/null || true
+        run_test "ICRC4.mo PocketIC" "$ICRC4_DIR/pic" "npx vitest run --reporter=basic" || true
+    else
+        log_skip "ICRC4.mo PocketIC (not configured)"
     fi
     
     # ICRC_fungible PocketIC tests
