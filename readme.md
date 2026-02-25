@@ -1,4 +1,4 @@
-# ICRC-1, ICRC-2, and ICRC-3 Fungible Token
+# ICRC-1, ICRC-2, ICRC-3, ICRC-4, ICRC-10, ICRC-21, ICRC-106, ICRC-107 Compatible Fungible Token
 
 ## Overview
 This project is focused on the development and implementation of a fungible token standard, utilizing blockchain or distributed ledger technology. The core of the project is written in Motoko and is compatibility with the DFINITY Internet Computer platform.
@@ -30,9 +30,6 @@ This project is focused on the development and implementation of a fungible toke
 - **Coding Standards**: Adhere to established Motoko coding practices. Ensure readability and maintainability of the code.
 - **Testing**: Thoroughly test any new features or changes in a controlled environment before integrating them into the main project.
 - **Documentation**: Update documentation and comments within the code to reflect changes or additions to the project.
-
-## Migration
-- **ICRC-3**: Version v0.0.6 updates ICRC3 with the class plus syntax and initialization.  If you have previouly deployed ICRC-3 you'll need to update your syntax to match the new pattern. You should be able to use your existing icrc3_migration_state variable and it should not require any kind of migration as the data structure is the same.  To upgrade your archive canisters to include the legacy get_transaction functions you will need to implement and run the upgrade helper in the ICRC3 directory(see the icrc3-mo directory in your .mops folder after running mops install).
 
 ## Testing
 
@@ -99,6 +96,32 @@ LEDGER=motoko LEDGER_TYPE=icrc npx jest --verbose
 ### DFINITY Index-ng Integration
 
 See `/test/integration/` for index-ng canister integration tests that verify block sync and transaction indexing.
+
+## ICRC-85 Open Value Sharing (OVS) Roll-Up
+
+This token deploys multiple components that each participate in [ICRC-85 Open Value Sharing](https://github.com/dfinity/ICRC/issues/85) via the [ovs-fixed](https://mops.one/ovs-fixed) library. Each component independently shares a portion of cycles with infrastructure providers based on its usage. Below is the complete roll-up of OVS namespaces active in a deployed token canister and its archives.
+
+### Ledger Canister
+
+| Component | Namespace | Actions Tracked | Cycle Formula | Period Reset |
+|-----------|-----------|-----------------|---------------|--------------|
+| **timer-tool** | `org.icdevs.icrc85.supertimer` | Timer actions scheduled | 1 XDR base + 1 XDR per 100K actions, max 100 XDR | Yes (delta since last report) |
+| **ICRC-1** | `org.icdevs.icrc85.icrc1` | Successful transfers, mints, burns | 1 XDR base + 100M cycles per action, max 100 XDR | Yes |
+| **ICRC-3** | `org.icdevs.icrc85.icrc3` | Ledger records added | 1 XDR base + 100M cycles per action, max 100 XDR | Yes |
+
+### Archive Canisters (per archive instance)
+
+| Component | Namespace | Actions Tracked | Cycle Formula | Period Reset |
+|-----------|-----------|-----------------|---------------|--------------|
+| **timer-tool** | `org.icdevs.icrc85.supertimer` | Timer actions scheduled | 1 XDR base + 1 XDR per 100K actions, max 100 XDR | Yes (delta since last report) |
+| **ICRC-3 Archive** | `org.icdevs.icrc85.icrc3archive` | Records stored (cumulative) | 1 XDR base + 1M cycles per record, max 100 XDR | **No** — storage-based, accumulates |
+
+### Notes
+
+- **1 XDR ≈ 1 trillion cycles** (1,000,000,000,000).
+- All OVS payments are capped at 50% of the canister's current cycle balance for safety.
+- Each component has a **7-day grace period** before the first share, then shares every **30 days**.
+- The ICRC-3 Archive uses `resetAtEndOfPeriod = false` because its value is proportional to total records stored, not throughput.
 
 ## Repository
 - [Project Repository](https://github.com/icdevsorg/ICRC_fungible)
