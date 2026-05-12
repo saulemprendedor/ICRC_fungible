@@ -37,32 +37,41 @@ echo "=== DFINITY Index-NG Comprehensive Integration Test ==="
 echo "Testing: $CANISTER_NAME"
 echo ""
 
-# Navigate to test directory
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-REPLICA_PORT="${DFX_PORT:-8887}"
+REPLICA_PORT=8887
 
 # --------------- Cleanup ---------------
 cleanup() {
     echo ""
     echo "=== Cleanup ==="
-    dfx stop 2>/dev/null || true
+    cd "$PROJECT_DIR"
+    icp network stop 2>/dev/null || true
     echo "Done!"
 }
 trap cleanup EXIT
 
 echo "🧹 Cleaning up previous state..."
-dfx stop 2>/dev/null || true
-rm -rf .dfx 2>/dev/null || true
+cd "$PROJECT_DIR"
+icp network stop 2>/dev/null || true
+rm -rf ".icp/cache/networks/local/state" ".icp/cache/networks/local/local.ids.json" 2>/dev/null || true
 
 # --------------- Replica & Deploy ---------------
 echo "🚀 Starting local replica on port $REPLICA_PORT..."
-dfx start --clean --background --host "127.0.0.1:$REPLICA_PORT"
+icp network start -d
 sleep 3
+
+# Setup deployer identity (minter)
+icp identity new icrc_deployer --storage plaintext 2>/dev/null || true
+icp identity default icrc_deployer
+DEPLOYER_PRINCIPAL=$(icp identity principal)
+icp token transfer 20 "$DEPLOYER_PRINCIPAL" --identity anonymous 2>/dev/null || true
+icp cycles mint --icp 15 2>/dev/null || true
 
 # Deploy with low archive thresholds so archiving actually happens
 echo "📦 Deploying $CANISTER_NAME canister (low archive thresholds)..."
-dfx deploy "$CANISTER_NAME" --argument "(opt record {
+icp deploy "$CANISTER_NAME" --args "(opt record {
   icrc1 = null;
   icrc2 = null;
   icrc3 = record {
@@ -83,48 +92,48 @@ dfx deploy "$CANISTER_NAME" --argument "(opt record {
     };
   };
   icrc4 = null;
-})"
+})" --args-format candid -y
 
-TOKEN_ID=$(dfx canister id "$CANISTER_NAME")
+TOKEN_ID=$(icp canister status "$CANISTER_NAME" --json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "✅ $CANISTER_NAME deployed at: $TOKEN_ID"
 
 echo "🔧 Initializing $CANISTER_NAME..."
-dfx canister call "$CANISTER_NAME" admin_init || echo "admin_init might not be needed"
+icp canister call "$CANISTER_NAME" admin_init "()" || echo "admin_init might not be needed"
 
 # Add cycles for archive creation
 echo "💎 Adding cycles to $CANISTER_NAME for archive creation..."
-dfx canister deposit-cycles 10000000000000 "$CANISTER_NAME"
+icp canister top-up --amount 10000000000000 "$CANISTER_NAME"
 
 # Deploy index-ng
 echo "📦 Deploying index-ng canister..."
-dfx deploy index --argument "(opt variant { Init = record { ledger_id = principal \"$TOKEN_ID\" } })"
-INDEX_ID=$(dfx canister id index)
+icp deploy index --args "(opt variant { Init = record { ledger_id = principal \"$TOKEN_ID\" } })" --args-format candid -y
+INDEX_ID=$(icp canister status index --json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "✅ Index deployed at: $INDEX_ID"
 
-MINTER=$(dfx identity get-principal)
+MINTER=$(icp identity principal)
 
 # --------------- Create test identities ---------------
-dfx identity new idx_alice   --storage-mode=plaintext 2>/dev/null || true
-dfx identity new idx_bob     --storage-mode=plaintext 2>/dev/null || true
-dfx identity new idx_charlie --storage-mode=plaintext 2>/dev/null || true
-dfx identity use idx_alice;   ALICE=$(dfx identity get-principal)
-dfx identity use idx_bob;     BOB=$(dfx identity get-principal)
-dfx identity use idx_charlie; CHARLIE=$(dfx identity get-principal)
-dfx identity use default
+icp identity new idx_alice   --storage plaintext 2>/dev/null || true
+icp identity new idx_bob     --storage plaintext 2>/dev/null || true
+icp identity new idx_charlie --storage plaintext 2>/dev/null || true
+icp identity default idx_alice;   ALICE=$(icp identity principal)
+icp identity default idx_bob;     BOB=$(icp identity principal)
+icp identity default idx_charlie; CHARLIE=$(icp identity principal)
+icp identity default icrc_deployer
 
 echo "👤 Minter  : $MINTER"
 echo "👤 Alice   : $ALICE"
 echo "👤 Bob     : $BOB"
 echo "👤 Charlie : $CHARLIE"
 
-FEE_RAW=$(dfx canister call "$CANISTER_NAME" icrc1_fee '()' | grep -o '[0-9_]*' | tr -d '_')
+FEE_RAW=$(icp canister call "$CANISTER_NAME" icrc1_fee '()' | grep -o '[0-9_]*' | tr -d '_')
 echo "💵 Fee: $FEE_RAW"
 
 # --------------- Helper functions ---------------
 do_mint() {
     local TO=$1; local AMT=$2
-    dfx identity use default
-    dfx canister call "$CANISTER_NAME" icrc1_transfer "(record {
+    icp identity default icrc_deployer
+    icp canister call "$CANISTER_NAME" icrc1_transfer "(record {
         to = record { owner = principal \"$TO\"; subaccount = null };
         amount = $AMT; fee = null; memo = null; created_at_time = null; from_subaccount = null;
     })"
@@ -132,8 +141,8 @@ do_mint() {
 
 do_transfer() {
     local FROM_ID=$1; local TO=$2; local AMT=$3
-    dfx identity use "$FROM_ID"
-    dfx canister call "$CANISTER_NAME" icrc1_transfer "(record {
+    icp identity default "$FROM_ID"
+    icp canister call "$CANISTER_NAME" icrc1_transfer "(record {
         to = record { owner = principal \"$TO\"; subaccount = null };
         amount = $AMT; fee = null; memo = null; created_at_time = null; from_subaccount = null;
     })"
@@ -141,16 +150,16 @@ do_transfer() {
 
 do_burn() {
     local FROM_ID=$1; local AMT=$2
-    dfx identity use "$FROM_ID"
-    dfx canister call "$CANISTER_NAME" burn "(record {
+    icp identity default "$FROM_ID"
+    icp canister call "$CANISTER_NAME" burn "(record {
         amount = $AMT; from_subaccount = null; memo = null; created_at_time = null;
     })"
 }
 
 do_approve() {
     local FROM_ID=$1; local SPENDER=$2; local AMT=$3
-    dfx identity use "$FROM_ID"
-    dfx canister call "$CANISTER_NAME" icrc2_approve "(record {
+    icp identity default "$FROM_ID"
+    icp canister call "$CANISTER_NAME" icrc2_approve "(record {
         spender = record { owner = principal \"$SPENDER\"; subaccount = null };
         amount = $AMT;
         fee = null; memo = null; created_at_time = null; from_subaccount = null;
@@ -160,8 +169,8 @@ do_approve() {
 
 do_transfer_from() {
     local CALLER_ID=$1; local FROM=$2; local TO=$3; local AMT=$4
-    dfx identity use "$CALLER_ID"
-    dfx canister call "$CANISTER_NAME" icrc2_transfer_from "(record {
+    icp identity default "$CALLER_ID"
+    icp canister call "$CANISTER_NAME" icrc2_transfer_from "(record {
         from = record { owner = principal \"$FROM\"; subaccount = null };
         to = record { owner = principal \"$TO\"; subaccount = null };
         amount = $AMT;
@@ -170,14 +179,14 @@ do_transfer_from() {
 }
 
 set_fee_collector() {
-    dfx identity use default
+    icp identity default icrc_deployer
     if [ "$1" == "null" ]; then
-        dfx canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
+        icp canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
             fee_collector = null;
             created_at_time = $(date +%s)000000000 : nat64;
         })"
     else
-        dfx canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
+        icp canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
             fee_collector = opt record { owner = principal \"$1\"; subaccount = null };
             created_at_time = $(date +%s)000000000 : nat64;
         })"
@@ -185,13 +194,13 @@ set_fee_collector() {
 }
 
 get_balance_ledger() {
-    dfx identity use default
-    dfx canister call "$CANISTER_NAME" icrc1_balance_of "(record { owner = principal \"$1\"; subaccount = null })" | grep -o '[0-9_]*' | tr -d '_'
+    icp identity default icrc_deployer
+    icp canister call "$CANISTER_NAME" icrc1_balance_of "(record { owner = principal \"$1\"; subaccount = null })" | grep -o '[0-9_]*' | tr -d '_'
 }
 
 get_balance_index() {
-    dfx identity use default
-    dfx canister call index icrc1_balance_of "(record { owner = principal \"$1\"; subaccount = null })" | grep -o '[0-9_]*' | tr -d '_'
+    icp identity default icrc_deployer
+    icp canister call index icrc1_balance_of "(record { owner = principal \"$1\"; subaccount = null })" | grep -o '[0-9_]*' | tr -d '_'
 }
 
 TESTS_PASSED=0
@@ -370,8 +379,8 @@ sleep 5
 # Check archives
 echo ""
 echo "📁 Checking archives..."
-dfx identity use default
-ARCHIVES=$(dfx canister call "$CANISTER_NAME" icrc3_get_archives "(record {})")
+icp identity default icrc_deployer
+ARCHIVES=$(icp canister call "$CANISTER_NAME" icrc3_get_archives "(record {})")
 echo "   $ARCHIVES"
 
 ARCHIVE_COUNT=$(echo "$ARCHIVES" | grep -c "canister_id" || echo "0")
@@ -389,7 +398,7 @@ echo "Waiting for index-ng to sync all blocks..."
 echo "=========================================="
 
 for attempt in $(seq 1 60); do
-    STATUS=$(dfx canister call index status)
+    STATUS=$(icp canister call index status "()")
     SYNCED=$(echo "$STATUS" | grep -o 'num_blocks_synced = [0-9]*' | grep -o '[0-9]*' || echo "0")
     if [ "$SYNCED" -ge "$BLOCK_COUNT" ]; then
         echo "   ✅ Index synced $SYNCED/$BLOCK_COUNT blocks (attempt $attempt)"
@@ -415,7 +424,7 @@ echo "=========================================="
 echo "Verifying blocks from index"
 echo "=========================================="
 
-BLOCKS_RESP=$(dfx canister call index get_blocks "(record { start = 0; length = $((BLOCK_COUNT + 5)) })")
+BLOCKS_RESP=$(icp canister call index get_blocks "(record { start = 0; length = $((BLOCK_COUNT + 5)) })")
 CHAIN_LEN=$(echo "$BLOCKS_RESP" | grep -o 'chain_length = [0-9_]*' | grep -o '[0-9_]*' | tr -d '_' || echo "0")
 echo "   Chain length reported by index: $CHAIN_LEN"
 
@@ -461,7 +470,7 @@ echo "=========================================="
 check_account_txns() {
     local LABEL=$1 PRINCIPAL=$2
     local RESP
-    RESP=$(dfx canister call index get_account_transactions "(record {
+    RESP=$(icp canister call index get_account_transactions "(record {
         account = record { owner = principal \"$PRINCIPAL\"; subaccount = null };
         start = null; max_results = 100;
     })")
@@ -487,7 +496,7 @@ echo "=========================================="
 echo "Verifying fee collector ranges"
 echo "=========================================="
 
-FEE_COL_RESP=$(dfx canister call index get_fee_collectors_ranges)
+FEE_COL_RESP=$(icp canister call index get_fee_collectors_ranges "()")
 echo "   $FEE_COL_RESP"
 
 # Charlie and Alice both served as fee collectors
@@ -507,7 +516,7 @@ echo "=========================================="
 echo "Verifying ledger_id"
 echo "=========================================="
 
-LEDGER_ID_RESP=$(dfx canister call index ledger_id)
+LEDGER_ID_RESP=$(icp canister call index ledger_id "()")
 echo "   Index reports: $LEDGER_ID_RESP"
 if echo "$LEDGER_ID_RESP" | grep -q "$TOKEN_ID"; then
     echo "   ✅ Ledger ID matches"
@@ -523,7 +532,7 @@ echo "=========================================="
 echo "Verifying subaccount listing"
 echo "=========================================="
 
-SUBACCOUNTS=$(dfx canister call index list_subaccounts "(record { owner = principal \"$ALICE\"; start = null })")
+SUBACCOUNTS=$(icp canister call index list_subaccounts "(record { owner = principal \"$ALICE\"; start = null })")
 echo "   Alice subaccounts: $SUBACCOUNTS"
 # Default subaccount should appear if Alice has a balance
 TESTS_PASSED=$((TESTS_PASSED + 1))

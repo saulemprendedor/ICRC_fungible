@@ -1,23 +1,53 @@
-# This script is used to deploy and configure an ICRC token canister on the Internet Computer network.
-# Ensure you have dfx (the DFINITY Canister SDK) installed and configured before running this script.
+# Deploy and configure ICRC token canister on Internet Computer mainnet.
+# Requires icp-cli installed and configured before running.
 
-# Exit immediately if a command exits with a non-zero status, and print each command.
 set -ex
 
-# --- Configuration Section ---
+# --- Identity Setup ---
 
-# Identity configuration. Replace '{production_identity}' with your production identity name. This identity needs to be a controller for your canister
-PRODUCTION_IDENTITY="{production_identity}"
-dfx identity use $PRODUCTION_IDENTITY
+icp identity new production_main_branch --storage plaintext || true
+icp identity default production_main_branch
+MAIN_BRANCH_PRINCIPAL=$(icp identity principal)
 
-# Canister identitfication - You need to create this canister either via dfx or throught the nns console
-PRODUCTION_CANISTER="{production_canister}"
+icp identity new production_liquidity_provider --storage plaintext || true
+icp identity default production_liquidity_provider
+LIQUIDITY_PROVIDER=$(icp identity principal)
 
-#check your cycles. The system needs at least 2x the archiveCycles below to create the archive canister.  We suggest funding the initial canister with 4x the cycles configured in archiveCycles and then using a tool like cycle ops to monitor your cycles. You will need to add the created archive canisters(created after the first maxActiveRecords are created) to cycleops manually for it to be monitored.
+icp identity new production_marketing_team --storage plaintext || true
+icp identity default production_marketing_team
+MARKETING_TEAM_PRINCIPAL=$(icp identity principal)
 
+icp identity new production_dev_team --storage plaintext || true
+icp identity default production_dev_team
+DEV_TEAM_PRINCIPAL=$(icp identity principal)
 
+icp identity new production_presale --storage plaintext || true
+icp identity default production_presale
+PRESALE_PRINCIPAL=$(icp identity principal)
 
-# Token configuration
+icp identity new production_dexScreener --storage plaintext || true
+icp identity default production_dexScreener
+DEXSCREENER_PRINCIPAL=$(icp identity principal)
+
+icp identity new production_charity --storage plaintext || true
+icp identity default production_charity
+CHARITY_PRINCIPAL=$(icp identity principal)
+
+icp identity new production_fee_collector --storage plaintext || true
+icp identity default production_fee_collector
+FEE_COLLECTOR_PRINCIPAL=$(icp identity principal)
+
+# --- Configuration ---
+
+# Replace with your production identity name — must be a controller of the canister
+PRODUCTION_IDENTITY="production_icrc_deployer"
+icp identity default $PRODUCTION_IDENTITY
+ADMIN_PRINCIPAL=$(icp identity principal)
+
+# Canister ID on mainnet — create via icp canister create or NNS console
+PRODUCTION_CANISTER="kctgo-cyaaa-aaaad-aanzq-cai"
+
+# Token config
 TOKEN_NAME="Test Token"
 TOKEN_SYMBOL="TTT"
 TOKEN_LOGO="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMSIgaGVpZ2h0PSIxIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9InJlZCIvPjwvc3ZnPg=="
@@ -29,15 +59,14 @@ MAX_MEMO=64
 MAX_ACCOUNTS=100000000
 SETTLE_TO_ACCOUNTS=99999000
 
-# Automatically fetches the principal ID of the currently used identity.
-ADMIN_PRINCIPAL=$(dfx identity get-principal)
+# --- Build & Deploy ---
 
-# --- Deployment Section ---
+icp build prodtoken -e ic
 
-dfx build --network ic token --check
-
-# Deploy the canister with the specified configuration.
-dfx canister --network ic install --mode install --wasm .dfx/ic/canisters/prodtoken/prodtoken.wasm.gz --argument "(opt record {icrc1 = opt record {
+# Install on mainnet canister
+icp canister install $PRODUCTION_CANISTER -e ic -m install \
+  --wasm ".icp/cache/artifacts/prodtoken" \
+  --args "(opt record {icrc1 = opt record {
   name = opt \"$TOKEN_NAME\";
   symbol = opt \"$TOKEN_SYMBOL\";
   logo = opt \"$TOKEN_LOGO\";
@@ -57,7 +86,7 @@ dfx canister --network ic install --mode install --wasm .dfx/ic/canisters/prodto
   permitted_drift = null;
   max_accounts = opt $MAX_ACCOUNTS;
   settle_to_accounts = opt $SETTLE_TO_ACCOUNTS;
-}; 
+};
 icrc2 = opt record{
   max_approvals_per_account = opt 10000;
   max_allowance = opt variant { TotalSupply = null};
@@ -65,7 +94,7 @@ icrc2 = opt record{
   advanced_settings = null;
   max_approvals = opt 10000000;
   settle_to_approvals = opt 9990000;
-}; 
+};
 icrc3 = opt record {
   maxActiveRecords = 3000;
   settleToRecords = 2000;
@@ -81,22 +110,97 @@ icrc4 = opt record {
   max_balances = opt 200;
   max_transfers = opt 200;
   fee = opt variant { ICRC1 = null};
-};})"
+};})" \
+  --args-format candid -y
 
-# Fetch the canister ID after deployment
-ICRC_CANISTER=$(dfx canister id token)
-
-# Output the canister ID
+ICRC_CANISTER=$(icp canister id token -e ic)
 echo $ICRC_CANISTER
 
-# --- Initialization and Query Section ---
+# --- Init & Verify ---
 
-# Initialize the admin configuration of the token canister
-dfx canister call token admin_init
+icp canister call token admin_init -e ic
 
-# Fetch and display various token details like name, symbol, decimals, fee, and metadata
-dfx canister call token icrc1_name  --query 
-dfx canister call token icrc1_symbol  --query 
-dfx canister call token icrc1_decimals  --query 
-dfx canister call token icrc1_fee  --query 
-dfx canister call token icrc1_metadata  --query 
+icp canister call token icrc1_name -e ic --query
+icp canister call token icrc1_symbol -e ic --query
+icp canister call token icrc1_decimals -e ic --query
+icp canister call token icrc1_fee -e ic --query
+icp canister call token icrc1_metadata -e ic --query
+
+# --- Mint Tokens ---
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 500_000_000_000_000_000;
+  to = record {
+    owner = principal \"$MAIN_BRANCH_PRINCIPAL\";
+    subaccount = null;
+  }
+})"
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 170_000_000_000_000_000;
+  to = record {
+    owner = principal \"$LIQUIDITY_PROVIDER\";
+    subaccount = null;
+  }
+})"
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 56_000_000_000_000_000;
+  to = record {
+    owner = principal \"$PRESALE_PRINCIPAL\";
+    subaccount = null;
+  }
+})"
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 24_000_000_000_000_000;
+  to = record {
+    owner = principal \"$DEXSCREENER_PRINCIPAL\";
+    subaccount = null;
+  }
+})"
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 100_000_000_000_000_000;
+  to = record {
+    owner = principal \"$MARKETING_TEAM_PRINCIPAL\";
+    subaccount = null;
+  }
+})"
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 100_000_000_000_000_000;
+  to = record {
+    owner = principal \"$DEV_TEAM_PRINCIPAL\";
+    subaccount = null;
+  }
+})"
+
+icp canister call token icrc1_transfer -e ic "(record {
+  memo = null;
+  created_at_time=null;
+  from_subaccoint = null;
+  amount = 50_000_000_000_000_000;
+  to = record {
+    owner = principal \"$CHARITY_PRINCIPAL\";
+    subaccount = null;
+  }
+})"

@@ -34,8 +34,12 @@
 
 set -e
 
-# DFX replica port - can be overridden via --port flag or DFX_PORT env var
-DFX_PORT="${DFX_PORT:-8887}"
+# ICP replica port - configured in icp.yaml (gateway.port: 8887)
+# Pass --port to override in test scripts that need it
+ICP_PORT="${ICP_PORT:-8887}"
+export ICP_PORT
+# Keep DFX_PORT for pocket-ic test compatibility
+DFX_PORT="${ICP_PORT}"
 export DFX_PORT
 
 # Check bash version for associative array support
@@ -129,8 +133,9 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --port)
+            ICP_PORT="$2"
             DFX_PORT="$2"
-            export DFX_PORT
+            export ICP_PORT DFX_PORT
             shift 2
             ;;
         --verbose)
@@ -245,11 +250,11 @@ check_prerequisites() {
         echo "✓ mops found"
     fi
     
-    if ! command -v dfx &> /dev/null; then
-        echo "❌ dfx not found"
+    if ! command -v icp &> /dev/null; then
+        echo "❌ icp-cli not found"
         missing=true
     else
-        echo "✓ dfx found"
+        echo "✓ icp-cli found"
     fi
     
     if ! command -v cargo &> /dev/null; then
@@ -394,76 +399,106 @@ build_canisters() {
     
     cd "$PROJECT_DIR"
     
-    # Ensure dfx is running
-    if ! dfx ping &> /dev/null; then
-        echo "Starting local dfx replica on port $DFX_PORT..."
-        dfx stop 2>/dev/null || true
-        dfx identity use default 2>/dev/null || true
-        dfx start --clean --background --host "127.0.0.1:$DFX_PORT"
+    # Ensure icp replica is running
+    if ! icp network status &> /dev/null; then
+        echo "Starting local icp replica..."
+        icp network stop 2>/dev/null || true
+        icp network start -d
         sleep 5
     fi
-     
+
     # Create canisters first
     echo "Creating canisters..."
-    dfx identity use default 2>/dev/null || true
-    dfx canister create token 2>/dev/null || true
-    dfx canister create token-mixin 2>/dev/null || true
-    dfx canister create token_icrc85 2>/dev/null || true
-    dfx canister create dummy_collector 2>/dev/null || true
-    
+    icp identity new icrc_deployer --storage plaintext 2>/dev/null || true
+    icp identity default icrc_deployer
+    icp canister create token 2>/dev/null || true
+    icp canister create token-mixin 2>/dev/null || true
+    icp canister create token_icrc85 2>/dev/null || true
+    icp canister create dummy_collector 2>/dev/null || true
+
     echo "Building token canister..."
-    dfx build token
-    
+    icp build token
+
     echo "Building token_icrc85 canister (for PocketIC tests)..."
-    dfx build token_icrc85 || echo "Warning: token_icrc85 build failed, continuing..."
-    
+    icp build token_icrc85 || echo "Warning: token_icrc85 build failed, continuing..."
+
     echo "Building dummy_collector canister (for PocketIC tests)..."
-    dfx build dummy_collector || echo "Warning: dummy_collector build failed, continuing..."
-    
+    icp build dummy_collector || echo "Warning: dummy_collector build failed, continuing..."
+
     if ! $SKIP_TOKEN_MIXIN && ! $ONLY_TOKEN_MIXIN; then
         echo "Building token-mixin canister..."
-        dfx build token-mixin || echo "Warning: token-mixin build failed, continuing..."
+        icp build token-mixin || echo "Warning: token-mixin build failed, continuing..."
     fi
-    
+
     if $ONLY_TOKEN_MIXIN; then
         echo "Building token-mixin canister..."
-        dfx build token-mixin
+        icp build token-mixin
     fi
-    
+
     echo "✓ ICRC_fungible canister builds complete"
-    
+
+    # Create .dfx-compatible WASM layout for PocketIC tests
+    # Tests hardcode .dfx/local/canisters/<name>/<name>.wasm.gz — bridge icp-cli artifacts
+    echo "Creating .dfx compatibility layer for PocketIC tests..."
+    for canister in token token-mixin token_icrc85 dummy_collector; do
+        artifact="$PROJECT_DIR/.icp/cache/artifacts/$canister"
+        dfx_dir="$PROJECT_DIR/.dfx/local/canisters/$canister"
+        if [ -f "$artifact" ]; then
+            mkdir -p "$dfx_dir"
+            gzip -c "$artifact" > "$dfx_dir/$canister.wasm.gz"
+        fi
+    done
+    echo "✓ .dfx compatibility layer ready"
+
+    # Build index.mo and create its .dfx compat layer (needed by index_push and icrc85 PocketIC tests)
+    INDEX_MO_DIR="$WORKSPACE_DIR/index.mo"
+    if [ -d "$INDEX_MO_DIR" ] && [ -f "$INDEX_MO_DIR/icp.yaml" ]; then
+        echo "Building index.mo canister..."
+        cd "$INDEX_MO_DIR"
+        mops install 2>/dev/null || true
+        icp build icrc_index 2>&1 || echo "Warning: icrc_index build failed, continuing..."
+        artifact="$INDEX_MO_DIR/.icp/cache/artifacts/icrc_index"
+        if [ -f "$artifact" ]; then
+            mkdir -p "$INDEX_MO_DIR/.dfx/local/canisters/icrc_index"
+            gzip -c "$artifact" > "$INDEX_MO_DIR/.dfx/local/canisters/icrc_index/icrc_index.wasm.gz"
+            # Copy DID file from integration tests (same interface)
+            cp "$PROJECT_DIR/test/integration/icrc_index.did" "$INDEX_MO_DIR/.dfx/local/canisters/icrc_index/icrc_index.did" 2>/dev/null || true
+            echo "✓ icrc_index.wasm.gz + icrc_index.did ready"
+        fi
+        cd "$PROJECT_DIR"
+    else
+        echo "Warning: index.mo not found at $INDEX_MO_DIR — index_push and icrc85 PocketIC tests will skip"
+    fi
+
     # Build ICRC library canisters needed for PocketIC tests
     if ! $SKIP_PIC; then
         echo ""
         echo "Building ICRC library canisters for PocketIC tests..."
-        
+
         # ICRC1.mo canisters
-        if [ -d "$ICRC1_DIR" ] && [ -f "$ICRC1_DIR/dfx.json" ]; then
+        if [ -d "$ICRC1_DIR" ] && [ -f "$ICRC1_DIR/icp.yaml" ]; then
             echo "Building ICRC1.mo canisters..."
             cd "$ICRC1_DIR"
-            dfx canister create --all 2>/dev/null || true
-            dfx build --all 2>&1 || echo "Warning: ICRC1.mo build had errors, continuing..."
+            icp build 2>&1 || echo "Warning: ICRC1.mo build had errors, continuing..."
             cd "$PROJECT_DIR"
         fi
-        
+
         # ICRC2.mo canisters
-        if [ -d "$ICRC2_DIR" ] && [ -f "$ICRC2_DIR/dfx.json" ]; then
+        if [ -d "$ICRC2_DIR" ] && [ -f "$ICRC2_DIR/icp.yaml" ]; then
             echo "Building ICRC2.mo canisters..."
             cd "$ICRC2_DIR"
-            dfx canister create --all 2>/dev/null || true
-            dfx build --all 2>&1 || echo "Warning: ICRC2.mo build had errors, continuing..."
+            icp build 2>&1 || echo "Warning: ICRC2.mo build had errors, continuing..."
             cd "$PROJECT_DIR"
         fi
-        
+
         # icrc3.mo canisters
-        if [ -d "$ICRC3_DIR" ] && [ -f "$ICRC3_DIR/dfx.json" ]; then
+        if [ -d "$ICRC3_DIR" ] && [ -f "$ICRC3_DIR/icp.yaml" ]; then
             echo "Building icrc3.mo canisters..."
             cd "$ICRC3_DIR"
-            dfx canister create --all 2>/dev/null || true
-            dfx build --all 2>&1 || echo "Warning: icrc3.mo build had errors, continuing..."
+            icp build 2>&1 || echo "Warning: icrc3.mo build had errors, continuing..."
             cd "$PROJECT_DIR"
         fi
-        
+
         echo "✓ ICRC library canister builds complete"
     fi
 }
@@ -490,7 +525,7 @@ run_dfinity_tests() {
     fi
     
     # Run against token-mixin
-    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.dfx/local/canisters/token-mixin/token-mixin.wasm.gz" ]; then
+    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.icp/cache/artifacts/token-mixin" ]; then
         run_test "DFINITY ICRC-1/2 vs token-mixin" "$PROJECT_DIR" "bash runners/run_dfinity_tests.sh --canister token-mixin" || true
     fi
 }
@@ -632,9 +667,9 @@ NTCSTUBTS
     
     # Run tests against token canister
     if ! $ONLY_TOKEN_MIXIN; then
-        if [ -f "$PROJECT_DIR/.dfx/local/canisters/token/token.wasm.gz" ]; then
-            echo "Copying token.wasm.gz to devefi test directory..."
-            cp "$PROJECT_DIR/.dfx/local/canisters/token/token.wasm.gz" "$DEVEFI_TEST_DIR/icrc_ledger/motoko_ledger.wasm.gz"
+        if [ -f "$PROJECT_DIR/.icp/cache/artifacts/token" ]; then
+            echo "Copying token wasm to devefi test directory..."
+            cp "$PROJECT_DIR/.icp/cache/artifacts/token" "$DEVEFI_TEST_DIR/icrc_ledger/motoko_ledger.wasm.gz"
             
             echo "Running Devefi tests against token canister..."
             echo "Note: noise.spec.ts and tx_window.spec.ts tests can take several minutes..."
@@ -661,9 +696,9 @@ NTCSTUBTS
     
     # Run tests against token-mixin canister
     if ! $SKIP_TOKEN_MIXIN; then
-        if [ -f "$PROJECT_DIR/.dfx/local/canisters/token-mixin/token-mixin.wasm.gz" ]; then
-            echo "Copying token-mixin.wasm.gz to devefi test directory..."
-            cp "$PROJECT_DIR/.dfx/local/canisters/token-mixin/token-mixin.wasm.gz" "$DEVEFI_TEST_DIR/icrc_ledger/motoko_ledger.wasm.gz"
+        if [ -f "$PROJECT_DIR/.icp/cache/artifacts/token-mixin" ]; then
+            echo "Copying token-mixin wasm to devefi test directory..."
+            cp "$PROJECT_DIR/.icp/cache/artifacts/token-mixin" "$DEVEFI_TEST_DIR/icrc_ledger/motoko_ledger.wasm.gz"
             
             echo "Running Devefi tests against token-mixin canister..."
             echo "Note: noise.spec.ts and tx_window.spec.ts tests can take several minutes..."
@@ -705,10 +740,10 @@ run_rosetta_tests() {
         return
     fi
     
-    # Stop the parent dfx so integration tests can start their own on the same port
-    echo "Stopping parent dfx replica before integration tests..."
+    # Stop the replica so integration tests can start their own on the same port
+    echo "Stopping replica before integration tests..."
     cd "$PROJECT_DIR"
-    dfx stop 2>/dev/null || true
+    icp network stop 2>/dev/null || true
     sleep 2
     
     cd "$PROJECT_DIR/test/integration"
@@ -719,7 +754,7 @@ run_rosetta_tests() {
     fi
     
     # Run against token-mixin
-    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.dfx/local/canisters/token-mixin/token-mixin.wasm.gz" ]; then
+    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.icp/cache/artifacts/token-mixin" ]; then
         run_test "Rosetta vs token-mixin" "$PROJECT_DIR/test/integration" "bash test_rosetta.sh --canister token-mixin" || true
     fi
 
@@ -736,14 +771,12 @@ run_index_tests() {
         return
     fi
     
-    # Ensure any leftover dfx is stopped so integration tests can bind the port
-    echo "Ensuring dfx is stopped before Index-NG tests..."
+    # Ensure any leftover replica is stopped so integration tests can bind the port
+    echo "Ensuring replica is stopped before Index-NG tests..."
     cd "$PROJECT_DIR"
-    dfx stop 2>/dev/null || true
-    cd "$PROJECT_DIR/test/integration"
-    dfx stop 2>/dev/null || true
+    icp network stop 2>/dev/null || true
     sleep 2
-    
+
     cd "$PROJECT_DIR/test/integration"
     
     # Run against token
@@ -752,7 +785,7 @@ run_index_tests() {
     fi
     
     # Run against token-mixin
-    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.dfx/local/canisters/token-mixin/token-mixin.wasm.gz" ]; then
+    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.icp/cache/artifacts/token-mixin" ]; then
         run_test "Index-NG vs token-mixin" "$PROJECT_DIR/test/integration" "bash test_index_ng.sh --canister token-mixin" || true
     fi
 }
@@ -766,12 +799,10 @@ run_index_mo_tests() {
         return
     fi
     
-    # Ensure any leftover dfx is stopped so integration tests can bind the port
-    echo "Ensuring dfx is stopped before index.mo tests..."
+    # Ensure any leftover replica is stopped so integration tests can bind the port
+    echo "Ensuring replica is stopped before index.mo tests..."
     cd "$PROJECT_DIR"
-    dfx stop 2>/dev/null || true
-    cd "$PROJECT_DIR/test/integration"
-    dfx stop 2>/dev/null || true
+    icp network stop 2>/dev/null || true
     sleep 2
     
     cd "$PROJECT_DIR/test/integration"
@@ -782,7 +813,7 @@ run_index_mo_tests() {
     fi
     
     # Run against token-mixin
-    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.dfx/local/canisters/token-mixin/token-mixin.wasm.gz" ]; then
+    if ! $SKIP_TOKEN_MIXIN && [ -f "$PROJECT_DIR/.icp/cache/artifacts/token-mixin" ]; then
         run_test "index.mo vs token-mixin" "$PROJECT_DIR/test/integration" "bash test_index_mo.sh --canister token-mixin" || true
     fi
 }
@@ -835,7 +866,7 @@ print_summary() {
 cleanup() {
     echo ""
     echo "Cleaning up..."
-    dfx stop 2>/dev/null || true
+    icp network stop 2>/dev/null || true
     docker stop rosetta-test 2>/dev/null || true
     docker rm rosetta-test 2>/dev/null || true
 }
@@ -851,7 +882,7 @@ main() {
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     echo "Started at: $(date)"
-    echo "DFX Port:    $DFX_PORT"
+    echo "ICP Port:    $ICP_PORT"
     echo ""
     
     check_prerequisites

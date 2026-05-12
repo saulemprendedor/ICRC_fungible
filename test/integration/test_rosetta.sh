@@ -41,10 +41,15 @@ echo ""
 # Configuration
 ROSETTA_IMAGE="dfinity/ic-icrc-rosetta-api:latest"
 ROSETTA_PORT=8082
-REPLICA_PORT="${DFX_PORT:-8887}"
+REPLICA_PORT=8887
+PROXY_PORT=8888
+PROXY_PID=""
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Check prerequisites
-for cmd in docker jq dfx; do
+for cmd in docker jq icp; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ $cmd is required but not found"; exit 1
     fi
@@ -56,7 +61,10 @@ cleanup() {
     echo "=== Cleanup ==="
     docker stop rosetta-test 2>/dev/null || true
     docker rm rosetta-test 2>/dev/null || true
-    dfx stop 2>/dev/null || true
+    [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
+    lsof -nP -i:"$PROXY_PORT" 2>/dev/null | awk 'NR>1{print $2}' | sort -u | xargs kill 2>/dev/null || true
+    cd "$PROJECT_DIR"
+    icp network stop 2>/dev/null || true
     echo "Done!"
 }
 trap cleanup EXIT
@@ -64,32 +72,41 @@ trap cleanup EXIT
 echo "🧹 Cleaning up previous state..."
 docker stop rosetta-test 2>/dev/null || true
 docker rm rosetta-test 2>/dev/null || true
-dfx stop 2>/dev/null || true
-rm -rf .dfx 2>/dev/null || true
+
+cd "$PROJECT_DIR"
+icp network stop 2>/dev/null || true
+rm -rf ".icp/cache/networks/local/state" ".icp/cache/networks/local/local.ids.json" 2>/dev/null || true
 
 # --------------- Replica & Deploy ---------------
 echo "🚀 Starting local replica..."
-dfx start --clean --background --host "127.0.0.1:$REPLICA_PORT" --domain localhost --domain host.docker.internal
+icp network start -d
 sleep 3
 
+# Setup deployer identity (minter)
+icp identity new icrc_deployer --storage plaintext 2>/dev/null || true
+icp identity default icrc_deployer
+DEPLOYER_PRINCIPAL=$(icp identity principal)
+icp token transfer 20 "$DEPLOYER_PRINCIPAL" --identity anonymous 2>/dev/null || true
+icp cycles mint --icp 15 2>/dev/null || true
+
 echo "📦 Deploying $CANISTER_NAME canister..."
-dfx deploy "$CANISTER_NAME" --argument '(null)'
-TOKEN_CANISTER=$(dfx canister id "$CANISTER_NAME")
+icp deploy "$CANISTER_NAME" --args "(null)" --args-format candid -y
+TOKEN_CANISTER=$(icp canister status "$CANISTER_NAME" --json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "✅ $CANISTER_NAME deployed at: $TOKEN_CANISTER"
 
 echo "🔧 Initializing $CANISTER_NAME..."
-dfx canister call "$CANISTER_NAME" admin_init || echo "admin_init might not be needed"
+icp canister call "$CANISTER_NAME" admin_init "()" || echo "admin_init might not be needed"
 
-MINTER=$(dfx identity get-principal)
+MINTER=$(icp identity principal)
 
 # --------------- Create test identities ---------------
-dfx identity new rosetta_alice   --storage-mode=plaintext 2>/dev/null || true
-dfx identity new rosetta_bob     --storage-mode=plaintext 2>/dev/null || true
-dfx identity new rosetta_charlie --storage-mode=plaintext 2>/dev/null || true
-dfx identity use rosetta_alice;   ALICE=$(dfx identity get-principal)
-dfx identity use rosetta_bob;     BOB=$(dfx identity get-principal)
-dfx identity use rosetta_charlie; CHARLIE=$(dfx identity get-principal)
-dfx identity use default
+icp identity new rosetta_alice   --storage plaintext 2>/dev/null || true
+icp identity new rosetta_bob     --storage plaintext 2>/dev/null || true
+icp identity new rosetta_charlie --storage plaintext 2>/dev/null || true
+icp identity default rosetta_alice;   ALICE=$(icp identity principal)
+icp identity default rosetta_bob;     BOB=$(icp identity principal)
+icp identity default rosetta_charlie; CHARLIE=$(icp identity principal)
+icp identity default icrc_deployer
 
 echo "👤 Minter  : $MINTER"
 echo "👤 Alice   : $ALICE"
@@ -97,14 +114,14 @@ echo "👤 Bob     : $BOB"
 echo "👤 Charlie : $CHARLIE"
 
 # --------------- Discover the fee ---------------
-FEE_RAW=$(dfx canister call "$CANISTER_NAME" icrc1_fee '()' | grep -o '[0-9_]*' | tr -d '_')
+FEE_RAW=$(icp canister call "$CANISTER_NAME" icrc1_fee '()' | grep -o '[0-9_]*' | tr -d '_')
 echo "💵 Fee: $FEE_RAW"
 
 # --------------- Helper functions ---------------
 do_mint() {
     local TO=$1; local AMT=$2
-    dfx identity use default
-    dfx canister call "$CANISTER_NAME" icrc1_transfer "(record {
+    icp identity default icrc_deployer
+    icp canister call "$CANISTER_NAME" icrc1_transfer "(record {
         to = record { owner = principal \"$TO\"; subaccount = null };
         amount = $AMT; fee = null; memo = null; created_at_time = null; from_subaccount = null;
     })"
@@ -112,8 +129,8 @@ do_mint() {
 
 do_transfer() {
     local FROM_ID=$1; local TO=$2; local AMT=$3
-    dfx identity use "$FROM_ID"
-    dfx canister call "$CANISTER_NAME" icrc1_transfer "(record {
+    icp identity default "$FROM_ID"
+    icp canister call "$CANISTER_NAME" icrc1_transfer "(record {
         to = record { owner = principal \"$TO\"; subaccount = null };
         amount = $AMT; fee = null; memo = null; created_at_time = null; from_subaccount = null;
     })"
@@ -121,16 +138,16 @@ do_transfer() {
 
 do_burn() {
     local FROM_ID=$1; local AMT=$2
-    dfx identity use "$FROM_ID"
-    dfx canister call "$CANISTER_NAME" burn "(record {
+    icp identity default "$FROM_ID"
+    icp canister call "$CANISTER_NAME" burn "(record {
         amount = $AMT; from_subaccount = null; memo = null; created_at_time = null;
     })"
 }
 
 do_approve() {
     local FROM_ID=$1; local SPENDER=$2; local AMT=$3; local EXPIRY=${4:-"null"}
-    dfx identity use "$FROM_ID"
-    dfx canister call "$CANISTER_NAME" icrc2_approve "(record {
+    icp identity default "$FROM_ID"
+    icp canister call "$CANISTER_NAME" icrc2_approve "(record {
         spender = record { owner = principal \"$SPENDER\"; subaccount = null };
         amount = $AMT;
         fee = null; memo = null; created_at_time = null; from_subaccount = null;
@@ -141,8 +158,8 @@ do_approve() {
 
 do_transfer_from() {
     local CALLER_ID=$1; local FROM=$2; local TO=$3; local AMT=$4
-    dfx identity use "$CALLER_ID"
-    dfx canister call "$CANISTER_NAME" icrc2_transfer_from "(record {
+    icp identity default "$CALLER_ID"
+    icp canister call "$CANISTER_NAME" icrc2_transfer_from "(record {
         from = record { owner = principal \"$FROM\"; subaccount = null };
         to = record { owner = principal \"$TO\"; subaccount = null };
         amount = $AMT;
@@ -151,14 +168,14 @@ do_transfer_from() {
 }
 
 set_fee_collector() {
-    dfx identity use default
+    icp identity default icrc_deployer
     if [ "$1" == "null" ]; then
-        dfx canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
+        icp canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
             fee_collector = null;
             created_at_time = $(date +%s)000000000 : nat64;
         })"
     else
-        dfx canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
+        icp canister call "$CANISTER_NAME" icrc107_set_fee_collector "(record {
             fee_collector = opt record { owner = principal \"$1\"; subaccount = null };
             created_at_time = $(date +%s)000000000 : nat64;
         })"
@@ -166,8 +183,8 @@ set_fee_collector() {
 }
 
 get_balance_ledger() {
-    dfx identity use default
-    dfx canister call "$CANISTER_NAME" icrc1_balance_of "(record { owner = principal \"$1\"; subaccount = null })" | grep -o '[0-9_]*' | tr -d '_'
+    icp identity default icrc_deployer
+    icp canister call "$CANISTER_NAME" icrc1_balance_of "(record { owner = principal \"$1\"; subaccount = null })" | grep -o '[0-9_]*' | tr -d '_'
 }
 
 # =============================================
@@ -325,12 +342,12 @@ echo "📊 Ledger info & balances after all phases"
 echo "=========================================="
 echo ""
 
-dfx identity use default
-dfx canister call "$CANISTER_NAME" icrc1_name
-dfx canister call "$CANISTER_NAME" icrc1_symbol
-dfx canister call "$CANISTER_NAME" icrc1_decimals
+icp identity default icrc_deployer
+icp canister call "$CANISTER_NAME" icrc1_name "()"
+icp canister call "$CANISTER_NAME" icrc1_symbol "()"
+icp canister call "$CANISTER_NAME" icrc1_decimals "()"
 
-SUPPLY_RAW=$(dfx canister call "$CANISTER_NAME" icrc1_total_supply '()' | grep -o '[0-9_]*' | tr -d '_')
+SUPPLY_RAW=$(icp canister call "$CANISTER_NAME" icrc1_total_supply '()' | grep -o '[0-9_]*' | tr -d '_')
 echo "   Total supply : $SUPPLY_RAW"
 
 ALICE_LEDGER=$(get_balance_ledger "$ALICE")
@@ -348,25 +365,40 @@ echo "   Ledger: $TOKEN_CANISTER"
 
 if [[ "$(uname)" == "Darwin" ]]; then
     HOST_IP="host.docker.internal"
+    ROSETTA_IC_PORT="$PROXY_PORT"
     DOCKER_PORT_MAP="-p $ROSETTA_PORT:8080"
     DOCKER_NETWORK_MODE=""
+    # Kill any stale proxy from a previous run
+    lsof -nP -i:"$PROXY_PORT" 2>/dev/null | awk 'NR>1{print $2}' | sort -u | xargs kill 2>/dev/null || true
+    sleep 0.5
+    # icp-cli gateway rejects Host: host.docker.internal — proxy rewrites it to localhost
+    python3 "$SCRIPT_DIR/ic-host-proxy.py" "$PROXY_PORT" "$REPLICA_PORT" &
+    PROXY_PID=$!
+    sleep 2
+    if ! lsof -nP -i:"$PROXY_PORT" -sTCP:LISTEN &>/dev/null && \
+       ! lsof -nP -i:"$PROXY_PORT" -sTCP6:LISTEN &>/dev/null; then
+        echo "❌ Proxy failed to start on port $PROXY_PORT"; exit 1
+    fi
+    echo "   Proxy PID $PROXY_PID: $PROXY_PORT → localhost:$REPLICA_PORT"
 else
     HOST_IP="127.0.0.1"
+    ROSETTA_IC_PORT="$REPLICA_PORT"
     DOCKER_PORT_MAP=""
     DOCKER_NETWORK_MODE="--network host"
 fi
 
-echo "   IC URL: http://$HOST_IP:$REPLICA_PORT"
+echo "   IC URL: http://$HOST_IP:$ROSETTA_IC_PORT"
 echo ""
 
 docker run -d \
     --name rosetta-test \
+    --platform linux/amd64 \
     $DOCKER_PORT_MAP \
     $DOCKER_NETWORK_MODE \
     --add-host=localhost:host-gateway \
     $ROSETTA_IMAGE \
     --ledger-id "$TOKEN_CANISTER" \
-    --network-url "http://$HOST_IP:$REPLICA_PORT" \
+    --network-url "http://$HOST_IP:$ROSETTA_IC_PORT" \
     --network-type testnet \
     --store-type in-memory
 

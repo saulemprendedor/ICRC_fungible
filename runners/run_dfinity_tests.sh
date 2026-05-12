@@ -2,12 +2,12 @@
 #
 # Run Official DFINITY ICRC-1/2 Tests
 #
-# This script deploys our token canister and runs the official DFINITY
-# test suite against it to verify ICRC-1 and ICRC-2 compliance.
+# Deploys token canister and runs the official DFINITY test suite
+# to verify ICRC-1 and ICRC-2 compliance.
 #
 # Prerequisites:
 #   - Rust/Cargo installed (https://rustup.rs)
-#   - dfx installed
+#   - icp-cli installed
 #   - Internet connection to clone DFINITY repo (first run)
 #
 # Usage:
@@ -48,8 +48,8 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
-if ! command -v dfx &> /dev/null; then
-    echo "ERROR: dfx not found. Install from https://internetcomputer.org/docs/current/developer-docs/setup/install"
+if ! command -v icp &> /dev/null; then
+    echo "ERROR: icp-cli not found. Install from https://cli.internetcomputer.org"
     exit 1
 fi
 
@@ -68,7 +68,6 @@ cd "$PROJECT_DIR"
 echo ""
 echo "Setting up Ed25519 test identity..."
 IDENTITY_PEM="$TEST_DIR/test_identity_ed25519.pem"
-# This is a well-known test key from DFINITY's test suite
 cat > "$IDENTITY_PEM" << 'PEMEOF'
 -----BEGIN PRIVATE KEY-----
 MFMCAQEwBQYDK2VwBCIEIJKDIfd1Ybt48Z23cVEbjL2DGj1P5iDYmthcrptvBO3z
@@ -81,24 +80,30 @@ ED25519_PRINCIPAL="k2t6j-2nvnp-4zjm3-25dtz-6xhaa-c7boj-5gayf-oj3xs-i43lp-teztq-6
 
 echo "Test Principal: $ED25519_PRINCIPAL"
 
-# Use dfx default identity for deployment (as minter)
-dfx identity use default
-MINTER_PRINCIPAL=$(dfx identity get-principal)
+# Use icrc_deployer identity for deployment (as minter)
+icp identity new icrc_deployer --storage plaintext || true
+icp identity default icrc_deployer
+MINTER_PRINCIPAL=$(icp identity principal)
 echo "Minter Principal: $MINTER_PRINCIPAL"
 
-# Check if dfx is running
-if ! dfx ping &> /dev/null; then
+# Check if replica is running
+if ! icp network status &> /dev/null; then
     echo ""
-    echo "Starting local dfx replica on port ${DFX_PORT:-8888}..."
-    dfx start --clean --background --host "127.0.0.1:${DFX_PORT:-8888}"
+    echo "Starting local icp replica..."
+    icp network start -d
     sleep 5
 fi
 
-# Deploy the token with the default identity as minter
+# Build and deploy the canister
 echo ""
-echo "Deploying $CANISTER_NAME canister..."
+echo "Building $CANISTER_NAME canister..."
+icp build "$CANISTER_NAME"
 
-dfx canister install "$CANISTER_NAME" --wasm ".dfx/local/canisters/$CANISTER_NAME/$CANISTER_NAME.wasm.gz" --argument "(opt record {
+echo "Deploying $CANISTER_NAME canister..."
+WASM_PATH="$PROJECT_DIR/.icp/cache/artifacts/$CANISTER_NAME"
+
+icp canister install "$CANISTER_NAME" --wasm "$WASM_PATH" -m reinstall \
+  --args "(opt record {
   icrc1 = opt record {
     name = opt \"DFINITY Test Token\";
     symbol = opt \"DTT\";
@@ -144,21 +149,20 @@ dfx canister install "$CANISTER_NAME" --wasm ".dfx/local/canisters/$CANISTER_NAM
     max_transfers = opt 200;
     fee = opt variant { ICRC1 = null };
   };
-})" --mode reinstall -y
+})" --args-format candid -y
 
-CANISTER_ID=$(dfx canister id "$CANISTER_NAME")
+CANISTER_ID=$(icp canister status "$CANISTER_NAME" --json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "$CANISTER_NAME Canister ID: $CANISTER_ID"
 
 # Initialize the token
 echo ""
 echo "Initializing $CANISTER_NAME..."
-dfx canister call "$CANISTER_NAME" admin_init
+icp canister call "$CANISTER_NAME" admin_init "()"
 
-# Mint tokens to the Ed25519 test identity for the test suite
-# The test suite needs this identity to have funds to run transfers
+# Mint tokens to the Ed25519 test identity
 echo ""
 echo "Minting tokens to Ed25519 test identity..."
-dfx canister call "$CANISTER_NAME" icrc1_transfer "(record {
+icp canister call "$CANISTER_NAME" icrc1_transfer "(record {
   to = record {
     owner = principal \"$ED25519_PRINCIPAL\";
     subaccount = null;
@@ -170,16 +174,16 @@ dfx canister call "$CANISTER_NAME" icrc1_transfer "(record {
   created_at_time = null;
 })"
 
-# Check balance
+# Verify balance
 echo ""
 echo "Verifying balance..."
-dfx canister call "$CANISTER_NAME" icrc1_balance_of "(record {
+icp canister call "$CANISTER_NAME" icrc1_balance_of "(record {
   owner = principal \"$ED25519_PRINCIPAL\";
   subaccount = null;
 })" --query
 
-# Get replica URL
-REPLICA_URL="http://localhost:${DFX_PORT:-8887}"
+# Replica URL — ICRC_fungible network runs on port 8887 (set in icp.yaml gateway.port)
+REPLICA_URL="http://localhost:${ICP_PORT:-8887}"
 
 echo ""
 echo "==================================="

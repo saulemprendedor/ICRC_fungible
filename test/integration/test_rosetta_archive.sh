@@ -11,7 +11,9 @@ echo ""
 # Configuration
 ROSETTA_IMAGE="dfinity/ic-icrc-rosetta-api:latest"
 ROSETTA_PORT=8082
-REPLICA_PORT="${DFX_PORT:-8887}"
+REPLICA_PORT=8887
+PROXY_PORT=8888
+PROXY_PID=""
 
 # Archive settings - low thresholds to trigger archiving quickly
 MAX_ACTIVE_RECORDS=20
@@ -20,9 +22,16 @@ MAX_RECORDS_IN_ARCHIVE=100
 MAX_RECORDS_TO_ARCHIVE=15
 ARCHIVE_CYCLES=2000000000000  # 2T cycles for archive
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
 # Check if Docker is available
 if ! command -v docker &> /dev/null; then
     echo "❌ Docker is not installed. Please install Docker first."
+    exit 1
+fi
+if ! command -v icp &> /dev/null; then
+    echo "❌ icp is not installed. Install from https://cli.internetcomputer.org"
     exit 1
 fi
 
@@ -32,7 +41,10 @@ cleanup() {
     echo "=== Cleanup ==="
     docker stop rosetta-test 2>/dev/null || true
     docker rm rosetta-test 2>/dev/null || true
-    dfx stop 2>/dev/null || true
+    [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
+    lsof -nP -i:"$PROXY_PORT" 2>/dev/null | awk 'NR>1{print $2}' | sort -u | xargs kill 2>/dev/null || true
+    cd "$PROJECT_DIR"
+    icp network stop 2>/dev/null || true
     echo "Done!"
 }
 
@@ -42,13 +54,22 @@ trap cleanup EXIT
 echo "🧹 Cleaning up previous state..."
 docker stop rosetta-test 2>/dev/null || true
 docker rm rosetta-test 2>/dev/null || true
-dfx stop 2>/dev/null || true
-rm -rf .dfx 2>/dev/null || true
+
+cd "$PROJECT_DIR"
+icp network stop 2>/dev/null || true
+rm -rf ".icp/cache/networks/local/state" ".icp/cache/networks/local/local.ids.json" 2>/dev/null || true
 
 # Start local replica
 echo "🚀 Starting local replica..."
-dfx start --clean --background --host "127.0.0.1:$REPLICA_PORT" --domain localhost --domain host.docker.internal
+icp network start -d
 sleep 3
+
+# Setup deployer identity (minter)
+icp identity new icrc_deployer --storage plaintext 2>/dev/null || true
+icp identity default icrc_deployer
+DEPLOYER_PRINCIPAL=$(icp identity principal)
+icp token transfer 20 "$DEPLOYER_PRINCIPAL" --identity anonymous 2>/dev/null || true
+icp cycles mint --icp 15 2>/dev/null || true
 
 # Deploy token canister with archive settings
 echo "📦 Deploying token canister with low archive thresholds..."
@@ -58,9 +79,7 @@ echo "   maxRecordsInArchiveInstance: $MAX_RECORDS_IN_ARCHIVE"
 echo "   maxRecordsToArchive: $MAX_RECORDS_TO_ARCHIVE"
 echo ""
 
-# Deploy with init args for low archive thresholds
-# archiveControllers type is opt opt vec principal - null means "use ledger canister's default"
-dfx deploy token --argument "(opt record {
+icp deploy token --args "(opt record {
   icrc1 = null;
   icrc2 = null;
   icrc3 = record {
@@ -81,25 +100,24 @@ dfx deploy token --argument "(opt record {
     };
   };
   icrc4 = null;
-})"
+})" --args-format candid -y
 
-TOKEN_CANISTER=$(dfx canister id token)
+TOKEN_CANISTER=$(icp canister status token --json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "✅ Token deployed at: $TOKEN_CANISTER"
 
 # Initialize the token
 echo "🔧 Initializing token..."
-dfx canister call token admin_init || echo "admin_init might not be needed"
+icp canister call token admin_init "()" || echo "admin_init might not be needed"
 
 # Add cycles to the token canister so it can create archives
 echo "💎 Adding cycles to token canister for archive creation..."
-# On local replica, we can use dfx to add cycles
-dfx canister deposit-cycles 10000000000000 token
+icp canister top-up --amount 10000000000000 token
 echo "   Added 10T cycles to token canister"
 
 # Get initial block count
 echo ""
 echo "📊 Initial block check..."
-dfx canister call token icrc3_get_blocks "(vec { record { start = 0 : nat; length = 1 : nat } })" | head -5
+icp canister call token icrc3_get_blocks "(vec { record { start = 0 : nat; length = 1 : nat } })" | head -5
 
 # Generate many transactions to trigger archiving
 echo ""
@@ -107,10 +125,11 @@ echo "💸 Generating 30+ transactions to trigger archiving..."
 
 # Mint initial tokens
 echo "   Minting initial tokens..."
-dfx canister call token icrc1_transfer "(record {
-  to = record { 
-    owner = principal \"$(dfx identity get-principal)\"; 
-    subaccount = null 
+MINTER_PRINCIPAL=$(icp identity principal)
+icp canister call token icrc1_transfer "(record {
+  to = record {
+    owner = principal \"$MINTER_PRINCIPAL\";
+    subaccount = null
   };
   amount = 10_000_000_000;
   fee = null;
@@ -130,10 +149,10 @@ for i in $(seq 1 35); do
     else
         RECIPIENT=$RECIPIENT2
     fi
-    dfx canister call token icrc1_transfer "(record {
-      to = record { 
-        owner = principal \"$RECIPIENT\"; 
-        subaccount = null 
+    icp canister call token icrc1_transfer "(record {
+      to = record {
+        owner = principal \"$RECIPIENT\";
+        subaccount = null
       };
       amount = $((1000 + i));
       fee = null;
@@ -153,28 +172,42 @@ sleep 5
 # Check block count after transactions
 echo ""
 echo "📊 ICRC3 block count after transactions..."
-dfx canister call token icrc3_get_blocks "(vec { record { start = 0 : nat; length = 100 : nat } })" | grep -E "log_length|blocks"
+icp canister call token icrc3_get_blocks "(vec { record { start = 0 : nat; length = 100 : nat } })" | grep -E "log_length|blocks"
 
 # Check archives
 echo ""
 echo "📁 Checking archives..."
-dfx canister call token icrc3_get_archives "(record {})"
+icp canister call token icrc3_get_archives "(record {})"
 
 # Get ledger info
 echo ""
 echo "📊 Getting ledger info..."
-dfx canister call token icrc1_name
-dfx canister call token icrc1_symbol
-dfx canister call token icrc1_decimals
-dfx canister call token icrc1_total_supply
+icp canister call token icrc1_name "()"
+icp canister call token icrc1_symbol "()"
+icp canister call token icrc1_decimals "()"
+icp canister call token icrc1_total_supply "()"
 
 # Check if we're on macOS (Darwin) or Linux
 if [[ "$(uname)" == "Darwin" ]]; then
     HOST_IP="host.docker.internal"
+    ROSETTA_IC_PORT="$PROXY_PORT"
     DOCKER_NETWORK_MODE=""
     DOCKER_PORT_MAP="-p $ROSETTA_PORT:8080"
+    # Kill any stale proxy from a previous run
+    lsof -nP -i:"$PROXY_PORT" 2>/dev/null | awk 'NR>1{print $2}' | sort -u | xargs kill 2>/dev/null || true
+    sleep 0.5
+    # icp-cli gateway rejects Host: host.docker.internal — proxy rewrites it to localhost
+    python3 "$SCRIPT_DIR/ic-host-proxy.py" "$PROXY_PORT" "$REPLICA_PORT" &
+    PROXY_PID=$!
+    sleep 2
+    if ! lsof -nP -i:"$PROXY_PORT" -sTCP:LISTEN &>/dev/null && \
+       ! lsof -nP -i:"$PROXY_PORT" -sTCP6:LISTEN &>/dev/null; then
+        echo "❌ Proxy failed to start on port $PROXY_PORT"; exit 1
+    fi
+    echo "   Proxy PID $PROXY_PID: $PROXY_PORT → localhost:$REPLICA_PORT"
 else
     HOST_IP="127.0.0.1"
+    ROSETTA_IC_PORT="$REPLICA_PORT"
     DOCKER_NETWORK_MODE="--network host"
     DOCKER_PORT_MAP=""
 fi
@@ -182,19 +215,19 @@ fi
 echo ""
 echo "🚀 Starting Rosetta server..."
 echo "   Ledger: $TOKEN_CANISTER"
-echo "   IC URL: http://$HOST_IP:$REPLICA_PORT"
+echo "   IC URL: http://$HOST_IP:$ROSETTA_IC_PORT"
 echo ""
 
 # Run Rosetta in Docker
-# --network-type testnet tells Rosetta to fetch the root key from the replica
 docker run -d \
     --name rosetta-test \
+    --platform linux/amd64 \
     $DOCKER_PORT_MAP \
     $DOCKER_NETWORK_MODE \
     --add-host=localhost:host-gateway \
     $ROSETTA_IMAGE \
     --ledger-id "$TOKEN_CANISTER" \
-    --network-url "http://$HOST_IP:$REPLICA_PORT" \
+    --network-url "http://$HOST_IP:$ROSETTA_IC_PORT" \
     --network-type testnet \
     --store-type in-memory
 
@@ -308,7 +341,7 @@ echo ""
 
 # Test /account/balance
 echo "6. Testing /account/balance..."
-MINTER_PRINCIPAL=$(dfx identity get-principal)
+MINTER_PRINCIPAL=$(icp identity principal)
 BALANCE_RESPONSE=$(curl -s -X POST "http://localhost:$ROSETTA_PORT/account/balance" \
     -H "Content-Type: application/json" \
     -d "{
@@ -344,7 +377,7 @@ echo ""
 
 # Get archive info again
 echo "📁 Final archive status:"
-dfx canister call token icrc3_get_archives "(record {})"
+icp canister call token icrc3_get_archives "(record {})"
 
 echo ""
 echo "=== Test Summary ==="
@@ -357,7 +390,7 @@ echo "Middle block endpoint: $(echo $MIDDLE_BLOCK_RESPONSE | jq -e '.block' > /d
 echo "Balance endpoint: $(echo $BALANCE_RESPONSE | jq -e '.balances' > /dev/null 2>&1 && echo "✅" || echo "❌")"
 
 # Check if archiving happened
-ARCHIVE_COUNT=$(dfx canister call token icrc3_get_archives "(record {})" | grep -c "canister_id" || echo "0")
+ARCHIVE_COUNT=$(icp canister call token icrc3_get_archives "(record {})" | grep -c "canister_id" || echo "0")
 if [ "$ARCHIVE_COUNT" -gt "0" ]; then
     echo "Archive created: ✅ ($ARCHIVE_COUNT archive(s))"
 else

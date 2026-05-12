@@ -1,3 +1,8 @@
 .plan/
 .git_backup_1771976217/
 data/
+.dfx/
+.icp/
+.mops/
+pic/node_modules/
+.dfinity-tests/
