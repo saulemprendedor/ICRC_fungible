@@ -462,7 +462,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   /// This prevents expensive decoding of maliciously large messages.
   system func inspect(
     {
-      caller = _ : Principal;
+      caller : Principal;
       arg : Blob;  // Raw message blob - check size FIRST
       msg : {
         // ICRC-1 endpoints
@@ -536,9 +536,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     }
   ) : Bool {
     // FIRST: Check raw arg size - cheapest check, prevents expensive decoding
-    // Max size is based on ICRC-4 batch limits: max_transfers * 200 bytes per transfer
-    // With default max_transfers=200, that's ~40KB max
-    let maxArgSize = 50_000; // 50KB absolute max for any message
+    // Admin callers (owner/controller) are trusted and exempt from the size limit
+    // so large payloads (e.g. logo updates) can be applied via admin_update_icrc1.
+    let isAdmin = caller == _owner or Principal.isController(caller);
+    let maxArgSize : Nat = if (isAdmin) 2_000_000 else 50_000;
     if (arg.size() > maxArgSize) {
       return false;
     };
