@@ -82,7 +82,7 @@ echo ""
 icp deploy token --args "(opt record {
   icrc1 = null;
   icrc2 = null;
-  icrc3 = record {
+  icrc3 = opt record {
     maxActiveRecords = $MAX_ACTIVE_RECORDS : nat;
     settleToRecords = $SETTLE_TO_RECORDS : nat;
     maxRecordsInArchiveInstance = $MAX_RECORDS_IN_ARCHIVE : nat;

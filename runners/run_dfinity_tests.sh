@@ -133,7 +133,7 @@ icp canister install "$CANISTER_NAME" --wasm "$WASM_PATH" -m reinstall \
     max_approvals = opt 10000000;
     settle_to_approvals = opt 9990000;
   };
-  icrc3 = record {
+  icrc3 = opt record {
     maxActiveRecords = 3000;
     settleToRecords = 2000;
     maxRecordsInArchiveInstance = 100000000;

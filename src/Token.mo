@@ -31,7 +31,7 @@ import Star "mo:star/star";
 shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     icrc1 : ?ICRC1.InitArgs;
     icrc2 : ?ICRC2.InitArgs;
-    icrc3 : ICRC3.InitArgs; //already typed nullable
+    icrc3 : ?ICRC3.InitArgs;
     icrc4 : ?ICRC4.InitArgs;
   }
 ) = this{
@@ -155,7 +155,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     transient let icrc3_args : ICRC3.InitArgs = switch(args){
       case(null) default_icrc3_args;
       case(?args){
-        switch(?args.icrc3){
+        switch(args.icrc3){
           case(null) default_icrc3_args;
           case(?val) val;
         };

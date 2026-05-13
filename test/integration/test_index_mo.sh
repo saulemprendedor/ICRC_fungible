@@ -98,7 +98,7 @@ echo "📦 Deploying $CANISTER_NAME canister (low archive thresholds)..."
 icp deploy "$CANISTER_NAME" --args "(opt record {
   icrc1 = null;
   icrc2 = null;
-  icrc3 = record {
+  icrc3 = opt record {
     maxActiveRecords = 20 : nat;
     settleToRecords = 10 : nat;
     maxRecordsInArchiveInstance = 100 : nat;
