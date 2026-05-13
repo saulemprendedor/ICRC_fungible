@@ -54,7 +54,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       };
       max_supply = null;
       min_burn_amount = ?10000;
-      max_memo = ?64;
+      max_memo = ?80;
       advanced_settings = null;
       metadata = null;
       fee_collector = null;
@@ -78,14 +78,14 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     };
 
     transient let default_icrc3_args : ICRC3.InitArgs = {
-      maxActiveRecords = 3000;
-      settleToRecords = 2000;
-      maxRecordsInArchiveInstance = 500_000;
+      maxActiveRecords = 10_000;
+      settleToRecords = 6_000;
+      maxRecordsInArchiveInstance = 100_000_000;
       maxArchivePages = 62500;
       archiveIndexType = #Stable;
-      maxRecordsToArchive = 8000;
+      maxRecordsToArchive = 10_000;
       archiveCycles = 20_000_000_000_000;
-      archiveControllers = null; //??[put cycle ops prinicpal here];
+      archiveControllers = null;
       supportedBlocks = [
         {
           block_type = "1xfer"; 
