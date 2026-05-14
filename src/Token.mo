@@ -532,6 +532,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         #update_archive_controllers : () -> ();
         #get_index_canister : () -> ();
         #deposit_cycles : () -> ();
+        #get_health : () -> ();
       };
     }
   ) : Bool {
@@ -636,6 +637,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       case (#deposit_cycles(_)) true;
       case (#get_data_certificate(_)) true;
       case (#is_ledger_ready(_)) true;
+      case (#get_health(_)) true;
     };
   };
 
@@ -1089,6 +1091,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       let amount = Cycles.available();
       let accepted = Cycles.accept<system>(amount);
       assert (accepted == amount);
+  };
+
+  public query func get_health() : async { cycles : Nat } {
+    { cycles = Cycles.balance() }
   };
 
   system func postupgrade() {
