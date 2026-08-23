@@ -1,0 +1,25 @@
+[dependencies]
+core = "2.1.0"
+star = "0.1.1"
+rep-indy-hash = "0.2.1"
+account = "1.0.1"
+ovs-fixed = "0.2.2"
+timer-tool = "0.2.1"
+class-plus = "0.2.1"
+
+[dev-dependencies]
+test = "2.1.2"
+fuzz = "1.0.0"
+itertools = "0.2.2"
+matchers = "2.1.0"
+bench = "2.0.1"
+
+[package]
+name = "icrc1-mo"
+version = "0.2.1"
+description = "icrc1 for motoko"
+repository = "https://github.com/icdevsorg/icrc1.mo"
+keywords = [ "icrc1", "fungible", "token", "standard", "dfinity" ]
+
+[toolchain]
+moc = "1.3.0"

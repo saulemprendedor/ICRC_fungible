@@ -1,9 +1,9 @@
 {
   "version": 3,
-  "mopsTomlDepsHash": "80eb80755f3028ac322ea5180b82d62b653cd71afac48482a1ef0cbdc326ddcd",
+  "mopsTomlDepsHash": "0b9b6b188c911c3876cf34ef2b5487a7642fbe7a80dcf1296d1f11606fd91e2c",
   "deps": {
     "core": "2.1.0",
-    "icrc1-mo": "0.2.1",
+    "icrc1-mo": "./vendor/icrc1-mo",
     "star": "0.1.1",
     "base": "https://github.com/dfinity/motoko-base#98c5717b283a8ec233907c3a3e92c79e3bbab1b3",
     "matchers": "2.1.0",
@@ -86,31 +86,6 @@
       "core@2.1.0/src/pure/RealTimeQueue.mo": "af133ae61c69ce4e00db5e9db53ddeccad84373fef82a156c85360c2426349dd",
       "core@2.1.0/src/pure/Set.mo": "f0155b1d548cbc8889fcff75ef52f0cab7998b034621e4faac8d3b79d7bbac07",
       "core@2.1.0/src/pure/Map.mo": "e9868fc4dd5e8e6272382e33241c59f8664e3de2e618cbf62fa8b20beabecfab"
-    },
-    "icrc1-mo@0.2.1": {
-      "icrc1-mo@0.2.1/src/ICRC1/Account.mo": "fc306c54316c555330f28befaa8cf4f9d8b7d8d32f5f13031aa71e450087ebc7",
-      "icrc1-mo@0.2.1/README.md": "f1110c9801b203e44d67fc05559ea3837b8b5f05bb5d03bb46cad38468327064",
-      "icrc1-mo@0.2.1/src/ICRC1/Inspect.mo": "c04bc035f325520ca7cb88a919e74478918dad0668a5a31be0c041dcc3b4b311",
-      "icrc1-mo@0.2.1/mops.toml": "025cbb27929c25ed64ce09c2dccd228fa64cfaabddd8b177897ec63171800a3e",
-      "icrc1-mo@0.2.1/LICENSE": "2cb09236b96392e61fa9cea8cb19ed91bf2a39861caee564eda3d0ea602dfefd",
-      "icrc1-mo@0.2.1/test_async_star.mo": "f13791ccea1d4cdaba51f9476b9b9b37c0b03d6f6923ce0943048806b533a49d",
-      "icrc1-mo@0.2.1/src/ICRC1/Interface.mo": "d23d64d5ec89cd73b39516b8436d033aa627ffea9e04dc2e7a35f1a05b4ce00f",
-      "icrc1-mo@0.2.1/src/ICRC1/Canisters/Token-mixin.mo": "bce8dc8eaa4f29aa10d8b7d2d99a19709b427a2cef240f45a3ae331351d135bb",
-      "icrc1-mo@0.2.1/src/ICRC1/Utils.mo": "d3745ac95298a3909d6ec0d2b5d24c08a24acd859877f75e917ce9c39a2233b4",
-      "icrc1-mo@0.2.1/src/ICRC1/Canisters/Token.mo": "246367c8b8d0cfb310f54fd8ddb6f2d9f9e51bcfbe122a92336eb25c4ee70616",
-      "icrc1-mo@0.2.1/src/ICRC1/openvaluesharing.mo": "1cb8415382842e283ab29bb8493aeaf4e417e424a9c438cd58c9ff941d6ebf90",
-      "icrc1-mo@0.2.1/src/ICRC1/Canisters/Token-interface-test.mo": "7659252ef4c500a625fa08584215503758342b1155d7aeccf5086ea06d2b2914",
-      "icrc1-mo@0.2.1/src/ICRC1/lib.mo": "4125dcd843c649b88667c45c91517088d69816f4e244c89d0a181052e26fcd5b",
-      "icrc1-mo@0.2.1/src/ICRC1/service.mo": "47e525e878034b6c1c5a062050557d1dc252fd34048185df1988b1a2c004d8a0",
-      "icrc1-mo@0.2.1/src/ICRC1/mixin.mo": "523f60e8cf48c71f949622213d673984b24f2d09cef7b63823fd9028790a4e80",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/types.mo": "a8a1ed6257ee0c97a4306691b9a440c2bab6dcde492cc02b60e03dfc0dc4bb69",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/lib.mo": "e9c0d99c62cd2d8dc1119304dc9fc4b3b4287f1fd732b18e3d3fe00fc7257325",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/v000_000_000/types.mo": "28428a053891813ceddb91fe97b9211eb820f3f78e379243f76dfe93a8f4548f",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/v000_000_000/lib.mo": "b911372b039f01c43bf7085d3dbef4204377763e564618ce13445ccfc8fd6ab6",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/v000_002_000/lib.mo": "6e15661ea2341cb704884909c8cb221478a18c5bb4f734abfc40395fd5a0bef8",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/v000_001_000/types.mo": "51f838fb0bffdc99c0f95e45d6dec5e7a20209f5512a0248b4923e4ef52ab64b",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/v000_002_000/types.mo": "9977af02e49f2ded9d18f27e7e6f45abe945ccc9b2694967891555762ae3de24",
-      "icrc1-mo@0.2.1/src/ICRC1/migrations/v000_001_000/lib.mo": "e3a3a50f56311424cc62075ce9ea1d5e29f78c0403a9c19473ce0b28afa7b81e"
     },
     "star@0.1.1": {
       "star@0.1.1/README.md": "87c310c1d4994d17218da7334927a0270ddf8581fdd2d4c24ea7e5deebe9e1c9",
