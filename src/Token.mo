@@ -534,20 +534,28 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   transient let DEFAULT_ARG_CAP : Nat = 5_120;
 
   /// One maximal batch entry measures 149 B plus its memo (229 B with an
-  /// 80-byte memo; a 200-entry batch is 45 868 B), and the vector adds 67 B.
+  /// 80-byte memo): a 29-byte principal, both subaccounts of 32 bytes, amount
+  /// and fee of 40 digits, `created_at_time` set. A 200-entry batch is
+  /// 45 868 B, of which 68 B are the type table and the vector.
   transient let TRANSFER_ENTRY_BYTES : Nat = 149;
-  /// One maximal account measures 65 B (a 200-account query is 13 037 B), and
-  /// the record adds 36 B.
+  /// One maximal account measures 65 B: a 29-byte principal and a 32-byte
+  /// subaccount. A 200-account query is 13 037 B, of which 37 B are framing.
   transient let BALANCE_ENTRY_BYTES : Nat = 65;
-  /// Margin over the measured framing of a batch (67 B and 36 B).
+  /// Margin over the measured framing of a batch (68 B and 37 B).
   transient let BATCH_FRAMING_BYTES : Nat = 256;
   /// What a consent request adds around the call it wraps: the method name
-  /// (the library refuses more than 256 B), the language tag and the device spec.
+  /// (the library refuses more than 256 B), the language tag and the device
+  /// spec. Measured around a full batch: 103 B with a 20-byte method name,
+  /// 375 B with a 256-byte one and a 35-byte language tag.
   transient let CONSENT_FRAMING_BYTES : Nat = 512;
-  /// A ledger-info update that carries a logo. Measured with a 110 214-byte
-  /// data URI plus the other metadata requests in the same call: 110 3xx B.
+  /// A ledger-info update that carries a logo. Measured by Candid-encoding a
+  /// 110 214-byte data URI plus a rename in the same call: about 110.3 KB (the
+  /// exact figure moves with the type table the client sends).
   /// Only the owner gets it.
   transient let OWNER_INFO_ARG_CAP : Nat = 160_000;
+  /// No batch limit, however configured, opens more than this. Without it
+  /// `max_transfers = 10 000` would admit 2.29 MB from any caller.
+  transient let BATCH_ARG_CEILING : Nat = 1_048_576;
 
   // The three readers below look at the persisted state directly. They must
   // stay pure: `inspect` runs on one replica, outside consensus, and whatever
@@ -557,7 +565,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     switch (icrc1_migration_state) {
       case (#v0_2_0(#data(state))) state.max_memo;
       case (#v0_1_0(#data(state))) state.max_memo;
-      case (_) ICRC1Inspect.defaultConfig.maxMemoSize;
+      // Not initialised yet. Every version is listed: a new one must not
+      // compile until somebody says where its limit lives.
+      case (#v0_0_0 _ or #v0_1_0(#id) or #v0_2_0(#id)) ICRC1Inspect.defaultConfig.maxMemoSize;
     };
   };
 
@@ -565,7 +575,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     switch (icrc4_migration_state) {
       case (#v0_2_0(#data(state))) state.ledger_info.max_transfers;
       case (#v0_1_0(#data(state))) state.ledger_info.max_transfers;
-      case (_) 0;
+      case (#v0_0_0 _ or #v0_1_0(#id) or #v0_2_0(#id)) 0;
     };
   };
 
@@ -573,7 +583,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     switch (icrc4_migration_state) {
       case (#v0_2_0(#data(state))) state.ledger_info.max_balances;
       case (#v0_1_0(#data(state))) state.ledger_info.max_balances;
-      case (_) 0;
+      case (#v0_0_0 _ or #v0_1_0(#id) or #v0_2_0(#id)) 0;
     };
   };
 
@@ -604,23 +614,85 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     true;
   };
 
+  /// What `entries` maximal transfers measure, with the margin.
+  func transferBatchBytes(entries : Nat) : Nat {
+    entries * (TRANSFER_ENTRY_BYTES + configuredMaxMemo()) + BATCH_FRAMING_BYTES;
+  };
+
+  /// What `entries` maximal accounts measure, with the margin.
+  func balanceBatchBytes(entries : Nat) : Nat {
+    entries * BALANCE_ENTRY_BYTES + BATCH_FRAMING_BYTES;
+  };
+
   func transferBatchCap() : Nat {
-    Nat.max(
-      DEFAULT_ARG_CAP,
-      configuredMaxTransfers() * (TRANSFER_ENTRY_BYTES + configuredMaxMemo()) + BATCH_FRAMING_BYTES,
-    );
+    Nat.min(BATCH_ARG_CEILING, Nat.max(DEFAULT_ARG_CAP, transferBatchBytes(configuredMaxTransfers())));
+  };
+
+  func balanceBatchCap() : Nat {
+    Nat.min(BATCH_ARG_CEILING, Nat.max(DEFAULT_ARG_CAP, balanceBatchBytes(configuredMaxBalances())));
+  };
+
+  /// Whether a blob starts with the Candid magic bytes, "DIDL". Decoding one
+  /// that does not traps, and a trap in `inspect` refuses the message.
+  func isCandid(blob : Blob) : Bool {
+    if (blob.size() < 4) return false;
+    blob[0] == 0x44 and blob[1] == 0x49 and blob[2] == 0x44 and blob[3] == 0x4C;
+  };
+
+  /// A consent request is a read, open to every caller, and its body FORMATS
+  /// the amounts of the call it wraps. So the wrapped call is held here to
+  /// the rules of the method it names — measured without them: a request
+  /// wrapping one transfer whose amount is a 1 KB number cost the canister
+  /// 6.0 B cycles, and from 10 KB on it ran into the instruction limit of the
+  /// message at 10.0 B cycles, from the anonymous principal.
+  ///
+  /// Only a request that wraps a batch may be larger than the default, and
+  /// only by what its entries account for. A method this ledger has no rule
+  /// for passes when it is small: its body answers without decoding anything.
+  func validConsentRequest(
+    request : ICRC1.ConsentMessageRequest,
+    requestBytes : Nat,
+    maxMemo : Nat,
+    icrc1Config : ICRC1Inspect.Config,
+    icrc2Config : ICRC2Inspect.Config,
+  ) : Bool {
+    if (requestBytes > request.arg.size() + CONSENT_FRAMING_BYTES) return false;
+    // Not Candid at all: nothing to validate and nothing the body can format.
+    // It answers with its typed error, which a small request may have.
+    if (not isCandid(request.arg)) return request.arg.size() <= DEFAULT_ARG_CAP;
+    if (request.method == "icrc4_transfer_batch") {
+      let ?batch : ?ICRC4.TransferBatchArgs = from_candid (request.arg) else return false;
+      return request.arg.size() <= transferBatchBytes(batch.size()) and validTransferBatch(batch, maxMemo);
+    };
+    if (request.arg.size() > DEFAULT_ARG_CAP) return false;
+    if (request.method == "icrc1_transfer") {
+      let ?args : ?ICRC1.TransferArgs = from_candid (request.arg) else return false;
+      return ICRC1Inspect.inspectTransfer(args, ?icrc1Config);
+    };
+    if (request.method == "icrc2_approve") {
+      let ?args : ?ICRC2.ApproveArgs = from_candid (request.arg) else return false;
+      return ICRC2Inspect.inspectApprove(args, ?icrc2Config);
+    };
+    if (request.method == "icrc2_transfer_from") {
+      let ?args : ?ICRC2.TransferFromArgs = from_candid (request.arg) else return false;
+      return ICRC2Inspect.inspectTransferFrom(args, ?icrc2Config);
+    };
+    true;
   };
 
   /// The ingress size limit of each method. Every method is listed, so a new
   /// one does not compile until it is classified here, and it gets more than
   /// the default only on purpose. The batch limits follow the ledger's own
-  /// configuration, so raising `max_transfers` raises the cap with it.
+  /// configuration, so raising `max_transfers` raises the cap with it, up to
+  /// `BATCH_ARG_CEILING`.
+  ///
+  /// Every other method stays at the default whatever `max_memo` is: a ledger
+  /// configured with a memo bound above ~4 800 bytes would have its larger
+  /// memos refused here although the body accepts them.
   func argCap(msg : InspectMsg, caller : Principal) : Nat {
     switch (msg) {
       case (#icrc4_transfer_batch _) transferBatchCap();
-      case (#icrc4_balance_of_batch _) {
-        Nat.max(DEFAULT_ARG_CAP, configuredMaxBalances() * BALANCE_ENTRY_BYTES + BATCH_FRAMING_BYTES);
-      };
+      case (#icrc4_balance_of_batch _) balanceBatchCap();
       // A wallet asks for the consent text of the call it is about to sign,
       // and the largest such call is a full batch.
       case (#icrc21_canister_call_consent_message _) transferBatchCap() + CONSENT_FRAMING_BYTES;
@@ -659,8 +731,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   ///     having installed or for controlling the canister.
   ///  2. A method whose body admits one principal is refused here for anyone
   ///     else, with the same predicate the body applies. For the owner that is
-  ///     the CURRENT `owner`, which `admin_update_owner` changes — not the
-  ///     principal that installed the canister.
+  ///     the CURRENT `owner`, which `admin_update_owner` changes. It is not
+  ///     `_owner`, the class parameter, which is whoever performed the last
+  ///     install or upgrade of the canister.
   ///  3. Reads stay open to every caller, the anonymous principal included,
   ///     when they arrive as update calls. Wallets and indexers read balances,
   ///     allowances and blocks through certified update calls; refusing them
@@ -712,17 +785,24 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       case (#get_transactions(getArgs)) {
         ICRC3Inspect.inspectLegacyBlocks(getArgs(), null);
       };
+      // A batch may weigh what its entries account for, not what the largest
+      // batch would: one entry padded to the cap is refused.
       case (#icrc4_transfer_batch(getArgs)) {
-        validTransferBatch(getArgs(), maxMemo);
+        let batch = getArgs();
+        arg.size() <= transferBatchBytes(batch.size()) and validTransferBatch(batch, maxMemo);
       };
       case (#icrc4_balance_of_batch(getArgs)) {
-        ICRC4Inspect.inspectBalanceOfBatch(getArgs(), ?{
+        let query_ = getArgs();
+        arg.size() <= balanceBatchBytes(query_.accounts.size()) and
+        ICRC4Inspect.inspectBalanceOfBatch(query_, ?{
           ICRC4Inspect.configWithLedgerLimits(configuredMaxTransfers(), configuredMaxBalances())
           with maxMemoSize = maxMemo
         });
       };
       case (#icrc21_canister_call_consent_message(getArgs)) {
-        ICRC1Inspect.inspectConsentMessage(getArgs(), ?icrc1Config);
+        let request = getArgs();
+        ICRC1Inspect.inspectConsentMessage(request, ?icrc1Config) and
+        validConsentRequest(request, arg.size(), maxMemo, icrc1Config, icrc2Config);
       };
       case (#burn(getArgs)) {
         ICRC1Inspect.inspectBurn(getArgs(), ?icrc1Config);
@@ -742,14 +822,15 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
       ) caller == owner;
 
-      // ---- The installer only, as the bodies have it ----
-      // `getUpgradeError` is a read, but its body answers the installer alone
+      // ---- `_owner` only, as the bodies have it: the principal that performed
+      // the last install or upgrade, re-bound on every upgrade ----
+      // `getUpgradeError` is a read, but its body answers that principal alone
       // and no wallet asks for it, so it is not part of the open reads.
       case (#upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _) {
         caller == _owner;
       };
 
-      // ---- The installer or a controller, as the body has it ----
+      // ---- `_owner` or a controller, as the body has it ----
       case (#admin_init _) caller == _owner or Principal.isController(caller);
 
       // ---- Open to every caller: reads without an argument worth checking,

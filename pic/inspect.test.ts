@@ -7,7 +7,8 @@
  *
  *  1. Size first, per method. 5 120 bytes by default; more only for the two
  *     batch methods, the consent request that wraps a batch, and the owner's
- *     ledger-info update (a logo).
+ *     ledger-info update (a logo). A batch may weigh what its entries account
+ *     for, and a consent request is held to the rules of the call it wraps.
  *  2. A method whose body admits one principal is refused at ingress for anyone
  *     else. The owner is the CURRENT owner, not whoever installed the canister.
  *  3. Reads sent as update calls stay open to every caller, the anonymous
@@ -227,6 +228,20 @@ const ApproveArgs = IDL.Record({
   expires_at: IDL.Opt(IDL.Nat64),
   spender: Account,
 });
+const TransferFromArgs = IDL.Record({
+  to: Account,
+  fee: IDL.Opt(IDL.Nat),
+  spender_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+  from: Account,
+  memo: IDL.Opt(IDL.Vec(IDL.Nat8)),
+  created_at_time: IDL.Opt(IDL.Nat64),
+  amount: IDL.Nat,
+});
+const GetAllowancesArgs = IDL.Record({
+  take: IDL.Opt(IDL.Nat),
+  prev_spender: IDL.Opt(Account),
+  from_account: IDL.Opt(Account),
+});
 const AllowanceArgs = IDL.Record({ account: Account, spender: Account });
 const Allowance = IDL.Record({ allowance: IDL.Nat, expires_at: IDL.Opt(IDL.Nat64) });
 const MintArgs = IDL.Record({
@@ -268,13 +283,19 @@ const BALANCE_ENTRY_BYTES = 65;
 const BATCH_FRAMING_BYTES = 256;
 const CONSENT_FRAMING_BYTES = 512;
 const OWNER_INFO_ARG_CAP = 160_000;
+const BATCH_ARG_CEILING = 1_048_576;
 /** The default `max_memo` of src/Token.mo. */
 const MAX_MEMO = 80;
 
-const transferBatchCap = (maxTransfers: number) =>
-  Math.max(DEFAULT_ARG_CAP, maxTransfers * (TRANSFER_ENTRY_BYTES + MAX_MEMO) + BATCH_FRAMING_BYTES);
+/** What `entries` maximal transfers may weigh, and `entries` maximal accounts. */
+const transferBatchBytes = (entries: number, maxMemo = MAX_MEMO) =>
+  entries * (TRANSFER_ENTRY_BYTES + maxMemo) + BATCH_FRAMING_BYTES;
+const balanceBatchBytes = (entries: number) => entries * BALANCE_ENTRY_BYTES + BATCH_FRAMING_BYTES;
+
+const transferBatchCap = (maxTransfers: number, maxMemo = MAX_MEMO) =>
+  Math.min(BATCH_ARG_CEILING, Math.max(DEFAULT_ARG_CAP, transferBatchBytes(maxTransfers, maxMemo)));
 const balanceBatchCap = (maxBalances: number) =>
-  Math.max(DEFAULT_ARG_CAP, maxBalances * BALANCE_ENTRY_BYTES + BATCH_FRAMING_BYTES);
+  Math.min(BATCH_ARG_CEILING, Math.max(DEFAULT_ARG_CAP, balanceBatchBytes(maxBalances)));
 
 // =============== Test Helpers ===============
 
@@ -310,10 +331,10 @@ const LONG_PRINCIPAL = Principal.fromUint8Array(new Uint8Array(29).fill(7));
 const MAX_ACCOUNT = { owner: LONG_PRINCIPAL, subaccount: [SUB] };
 
 /** The largest transfer a ledger with an 80-byte memo accepts: every optional field set. */
-const maxTransfer = () => ({
+const maxTransfer = (memo = MAX_MEMO) => ({
   to: MAX_ACCOUNT,
   fee: [BIG],
-  memo: [bytes(MAX_MEMO)],
+  memo: [bytes(memo)],
   from_subaccount: [SUB],
   created_at_time: [2n ** 64n - 1n],
   amount: BIG,
@@ -404,6 +425,16 @@ class Ledger {
     await work();
     return before - (await this.balance());
   }
+
+  /** An upgrade to the same wasm, performed by `sender`. */
+  upgradeAs = (sender: Principal) =>
+    this.pic.upgradeCanister({
+      canisterId: this.id,
+      wasm: readFileSync(TOKEN_WASM_PATH),
+      arg: IDL.encode([buildTokenInitTypes(IDL)], [[]]),
+      sender,
+      upgradeModeOptions: { wasm_memory_persistence: [{ keep: null }], skip_pre_upgrade: [] },
+    });
 
   async installRawCaller(): Promise<Principal> {
     const rawId = await this.pic.createCanister({ sender: this.installer });
@@ -510,6 +541,15 @@ describe('inspect: the named exceptions', () => {
     // Every method without an exception fits under the default, at its largest.
     expect(enc([TransferArgs], [maxTransfer()]).length).toBeLessThan(DEFAULT_ARG_CAP);
     expect(enc([GetBlocksArgs], [Array(100).fill({ start: BIG, length: BIG })]).length).toBeLessThan(DEFAULT_ARG_CAP);
+
+    // The framing of a consent request, around the largest batch.
+    const batch = enc([ICRC4TransferArgs], [Array(200).fill(maxTransfer())]);
+    expect(enc([ConsentMessageRequest], [consentFor('icrc4_transfer_batch', batch)]).length - batch.length).toBe(103);
+    const wordy = { ...consentFor('x'.repeat(256), batch), user_preferences: { metadata: { language: 'x'.repeat(35), utc_offset_minutes: [60] }, device_spec: [{ GenericDisplay: null }] } };
+    expect(enc([ConsentMessageRequest], [wordy]).length - batch.length).toBeLessThanOrEqual(CONSENT_FRAMING_BYTES);
+
+    expect(logoRequest(110_214).length).toBeGreaterThan(110_214);
+    expect(logoRequest(110_214).length).toBeLessThan(110_500);
   });
 
   it('icrc4_transfer_batch: the largest batch the ledger takes is admitted, one byte over the limit is not', async () => {
@@ -550,10 +590,75 @@ describe('inspect: the named exceptions', () => {
     expect(full.length).toBeGreaterThan(transferBatchCap(100) - BATCH_FRAMING_BYTES); // larger than the call it wraps
     expect(full.length).toBeLessThanOrEqual(cap);
     await expect(l.send('icrc21_canister_call_consent_message', full, l.stranger)).resolves.toBeDefined();
-    await expect(l.send('icrc21_canister_call_consent_message', encodeExactly([ConsentMessageRequest], [request], cap), l.stranger))
+    // The request may add the framing to the call it wraps, and no more.
+    const most = batch.length + CONSENT_FRAMING_BYTES;
+    expect(most).toBeLessThanOrEqual(cap);
+    await expect(l.send('icrc21_canister_call_consent_message', encodeExactly([ConsentMessageRequest], [request], most), l.stranger))
       .resolves.toBeDefined();
+    await expect(l.send('icrc21_canister_call_consent_message', encodeExactly([ConsentMessageRequest], [request], most + 1), l.stranger))
+      .rejects.toThrow(REFUSED);
     await expect(l.send('icrc21_canister_call_consent_message', encodeExactly([ConsentMessageRequest], [request], cap + 1), l.stranger))
       .rejects.toThrow(REFUSED);
+  });
+
+  it('a consent request is held to the rules of the call it wraps', async () => {
+    const ask = (method: string, inner: Uint8Array, sender = l.anonymous) =>
+      l.send('icrc21_canister_call_consent_message', enc([ConsentMessageRequest], [consentFor(method, inner)]), sender);
+    const giant = 1n << (7n * 10_000n - 1n); // a number that takes 10 000 bytes
+
+    // Positive control: the same requests, well formed, are answered and paid for.
+    const admitted = await l.spent(async () => {
+      await ask('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice)]]));
+      await ask('icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice)]));
+    });
+    expect(admitted).toBeGreaterThanOrEqual(2n * 5_000_000n);
+
+    const spender = { owner: l.stranger, subaccount: [] };
+    const approve = { fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: giant, expected_allowance: [], expires_at: [], spender };
+    const transferFrom = { to: spender, fee: [], spender_subaccount: [], from: spender, memo: [], created_at_time: [], amount: giant };
+    const refused: Array<[string, string, Uint8Array]> = [
+      ['a giant amount in a batch', 'icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice, null, giant)]])],
+      ['a 41-digit amount in a batch', 'icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice, null, 10n ** 40n)]])],
+      ['a giant amount in a transfer', 'icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, null, giant)])],
+      ['a 41-digit amount in a transfer', 'icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, null, 10n ** 40n)])],
+      ['a giant amount in an approval', 'icrc2_approve', enc([ApproveArgs], [approve])],
+      ['a giant amount in a transfer_from', 'icrc2_transfer_from', enc([TransferFromArgs], [transferFrom])],
+      ['an 81-byte memo in a transfer', 'icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, bytes(81))])],
+      ['a batch that is not a batch', 'icrc4_transfer_batch', enc([IDL.Text], ['not a batch'])],
+      ['one entry padded to the size of many', 'icrc4_transfer_batch', encodeExactly([ICRC4TransferArgs], [[smallTransfer(l.alice)]], transferBatchBytes(1) + 1)],
+      ['a method without a batch, above the default', 'icrc1_transfer', encodeExactly([TransferArgs], [smallTransfer(l.alice)], DEFAULT_ARG_CAP + 1)],
+      ['an unknown method, above the default', 'no_such_method', new Uint8Array(DEFAULT_ARG_CAP + 1)],
+      ['bytes that are not Candid, above the default', 'icrc4_transfer_batch', new Uint8Array(DEFAULT_ARG_CAP + 1)],
+    ];
+    const spent = await l.spent(async () => {
+      for (const [label, method, inner] of refused) {
+        await expect(ask(method, inner), label).rejects.toThrow(REFUSED);
+      }
+    });
+    expect(spent).toBeLessThan(1_000_000n);
+
+    // A method this ledger has no rule for is answered when it is small.
+    await expect(ask('no_such_method', new Uint8Array(64))).resolves.toBeDefined();
+    // So is one whose bytes are not Candid: the body answers with its typed error.
+    await expect(ask('icrc1_transfer', new Uint8Array([0, 1, 2, 3]))).resolves.toBeDefined();
+    await expect(ask('icrc1_transfer', encodeExactly([TransferArgs], [smallTransfer(l.alice)], DEFAULT_ARG_CAP))).resolves.toBeDefined();
+  });
+
+  it('a batch may weigh what its entries account for, not what the largest batch would', async () => {
+    const one = [smallTransfer(l.alice)];
+    const account = { accounts: [{ owner: l.alice, subaccount: [] }] };
+    await expect(l.send('icrc4_transfer_batch', encodeExactly([ICRC4TransferArgs], [one], transferBatchBytes(1)), l.stranger)).resolves.toBeDefined();
+    await expect(l.send('icrc4_balance_of_batch', encodeExactly([BalanceQueryArgs], [account], balanceBatchBytes(1)), l.stranger)).resolves.toBeDefined();
+
+    const spent = await l.spent(async () => {
+      for (const sender of [l.anonymous, l.stranger]) {
+        await expect(l.send('icrc4_transfer_batch', encodeExactly([ICRC4TransferArgs], [one], transferBatchBytes(1) + 1), sender)).rejects.toThrow(REFUSED);
+        await expect(l.send('icrc4_transfer_batch', encodeExactly([ICRC4TransferArgs], [one], transferBatchCap(100)), sender)).rejects.toThrow(REFUSED);
+        await expect(l.send('icrc4_balance_of_batch', encodeExactly([BalanceQueryArgs], [account], balanceBatchBytes(1) + 1), sender)).rejects.toThrow(REFUSED);
+        await expect(l.send('icrc4_balance_of_batch', encodeExactly([BalanceQueryArgs], [account], balanceBatchCap(100)), sender)).rejects.toThrow(REFUSED);
+      }
+    });
+    expect(spent).toBeLessThan(1_000_000n);
   });
 
   it('the batch limits follow the ledger configuration', async () => {
@@ -578,6 +683,34 @@ describe('inspect: the named exceptions', () => {
     await expect(l.send('icrc4_balance_of_batch', encodeExactly([BalanceQueryArgs], [accounts200], balanceBatchCap(200) + 1), l.stranger))
       .rejects.toThrow(REFUSED);
   });
+
+  it('no configuration opens more than the ceiling', async () => {
+    const c = await Ledger.create({ maxTransfers: 10_000, maxBalances: 100_000 });
+    try {
+      expect(transferBatchBytes(10_000)).toBeGreaterThan(BATCH_ARG_CEILING); // the configuration asks for 2.29 MB
+      expect(transferBatchCap(10_000)).toBe(BATCH_ARG_CEILING);
+      expect(balanceBatchCap(100_000)).toBe(BATCH_ARG_CEILING);
+
+      // 4 580 maximal entries account for more than the ceiling, so only the ceiling can refuse them.
+      const entries = 4_580;
+      const over = enc([ICRC4TransferArgs], [Array(entries).fill(maxTransfer())]);
+      expect(over.length).toBeGreaterThan(BATCH_ARG_CEILING);
+      expect(over.length).toBeLessThanOrEqual(transferBatchBytes(entries));
+      const accounts = enc([BalanceQueryArgs], [{ accounts: Array(16_200).fill(MAX_ACCOUNT) }]);
+      expect(accounts.length).toBeGreaterThan(BATCH_ARG_CEILING);
+      expect(accounts.length).toBeLessThanOrEqual(balanceBatchBytes(16_200));
+      const spent = await c.spent(async () => {
+        await expect(c.send('icrc4_transfer_batch', over, c.stranger)).rejects.toThrow(REFUSED);
+        await expect(c.send('icrc4_balance_of_batch', accounts, c.stranger)).rejects.toThrow(REFUSED);
+      });
+      expect(spent).toBeLessThan(1_000_000n);
+
+      // Under the ceiling the configured limit still applies: 300 entries, where 200 would not do.
+      await expect(c.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [Array(300).fill(maxTransfer())]), c.stranger)).resolves.toBeDefined();
+    } finally {
+      await c.tearDown();
+    }
+  }, 120_000);
 
   it('admin_update_icrc1: a 110 KB logo from the owner is stored; nobody else gets the allowance', async () => {
     const logo = logoRequest(110_214);
@@ -668,6 +801,23 @@ describe('inspect: caller class', () => {
     await expect(l.send('update_archive_controllers', none, l.newOwner)).rejects.toThrow(REFUSED);
   });
 
+  it('whoever upgrades the canister takes the installer-gated methods', async () => {
+    const none = enc([], []);
+    await expect(l.send('update_archive_controllers', none, l.installer)).resolves.toBeDefined();
+    await expect(l.send('update_archive_controllers', none, l.controller)).rejects.toThrow(REFUSED);
+
+    await l.upgradeAs(l.controller);
+    await l.pic.tick(3);
+
+    await expect(l.send('update_archive_controllers', none, l.controller)).resolves.toBeDefined();
+    await expect(l.send('getUpgradeError', none, l.controller)).resolves.toBeDefined();
+    await expect(l.send('update_archive_controllers', none, l.installer)).rejects.toThrow(REFUSED);
+    await expect(l.send('getUpgradeError', none, l.installer)).rejects.toThrow(REFUSED);
+    // The owner did not move with the upgrade.
+    await expect(l.send('admin_update_icrc2', enc([IDL.Vec(Icrc2InfoRequest)], [[]]), l.installer)).resolves.toBeDefined();
+    await expect(l.send('admin_update_icrc2', enc([IDL.Vec(Icrc2InfoRequest)], [[]]), l.controller)).rejects.toThrow(REFUSED);
+  });
+
   it('the methods anybody may call stay open', async () => {
     for (const sender of [l.stranger, l.anonymous]) {
       await expect(l.send('icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice)]), sender)).resolves.toBeDefined();
@@ -717,12 +867,38 @@ describe('inspect: reads sent as update calls', () => {
       const allowance = await l.send('icrc2_allowance', enc([AllowanceArgs], [{ account, spender: account }]), sender);
       expect((IDL.decode([Allowance], allowance)[0] as any).allowance).toBe(0n);
 
-      await expect(l.send('icrc3_get_blocks', enc([GetBlocksArgs], [[{ start: 0n, length: 10n }]]), sender)).resolves.toBeDefined();
-      await expect(l.send('archives', enc([], []), sender)).resolves.toBeDefined();
-      await expect(l.send('icrc1_name', enc([], []), sender)).resolves.toBeDefined();
-      await expect(l.send('icrc1_metadata', enc([], []), sender)).resolves.toBeDefined();
+      // Every other read, one by one: closing any of them is a wallet or an indexer broken.
+      const none = enc([], []);
+      const reads: Array<[string, Uint8Array]> = [
+        ...[
+          'icrc1_name', 'icrc1_symbol', 'icrc1_decimals', 'icrc1_fee', 'icrc1_metadata', 'icrc1_total_supply',
+          'icrc1_minting_account', 'icrc1_supported_standards', 'icrc10_supported_standards',
+          'icrc3_get_tip_certificate', 'icrc3_supported_block_types', 'get_tip', 'archives',
+          'icrc4_maximum_update_batch_size', 'icrc4_maximum_query_batch_size', 'icrc106_get_index_principal',
+          'icrc107_get_fee_collector', 'get_icrc85_stats', 'get_index_canister', 'get_data_certificate',
+          'is_ledger_ready', 'get_health',
+        ].map((method): [string, Uint8Array] => [method, none]),
+        ['icrc3_get_blocks', enc([GetBlocksArgs], [[{ start: 0n, length: 10n }]])],
+        // The largest request the field validation admits: 100 ranges with a 40-digit start.
+        ['icrc3_get_blocks', enc([GetBlocksArgs], [Array(100).fill({ start: BIG, length: 1_000n })])],
+        ['icrc3_get_archives', enc([IDL.Record({ from: IDL.Opt(IDL.Principal) })], [{ from: [] }])],
+        ['get_blocks', enc([LegacyBlocksArgs], [{ start: 0n, length: 10n }])],
+        ['get_transactions', enc([LegacyBlocksArgs], [{ start: 0n, length: 10n }])],
+        ['icrc103_get_allowances', enc([GetAllowancesArgs], [{ take: [10n], prev_spender: [], from_account: [account] }])],
+        ['icrc4_balance_of_batch', enc([BalanceQueryArgs], [{ accounts: [account] }])],
+        ['icrc21_canister_call_consent_message', enc([ConsentMessageRequest], [consentFor('icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice)]))])],
+      ];
+      for (const [method, arg] of reads) {
+        // Admitted is what is asserted: on a ledger without a block yet, the
+        // body of a tip read traps ("No root"), and that is not the filter.
+        const failure = await l.send(method, arg, sender).then(() => null, (e: Error) => e.message);
+        if (failure !== null) {
+          expect(failure, `${method} from ${sender.toText()}`).not.toMatch(REFUSED);
+          expect(['icrc3_get_tip_certificate', 'get_tip', 'get_data_certificate'], failure).toContain(method);
+        }
+      }
     }
-  });
+  }, 60_000);
 
   it('refuses the same reads above the default limit', async () => {
     const account = { owner: l.alice, subaccount: [] };
@@ -774,6 +950,12 @@ describe('inspect: field validation of updates', () => {
 
     await expect(l.send('icrc1_transfer', enc([TransferArgs], [smallTransfer(l.stranger, bytes(81))]), l.alice)).rejects.toThrow(REFUSED);
     await expect(l.send('icrc2_approve', enc([ApproveArgs], [approve(memo)]), l.alice)).rejects.toThrow(REFUSED);
+    const transferFrom = (m: number[][]) => ({
+      to: spender, fee: [], spender_subaccount: [], from: { owner: l.alice, subaccount: [] },
+      memo: m, created_at_time: [], amount: 1_000n,
+    });
+    await expect(l.send('icrc2_transfer_from', enc([TransferFromArgs], [transferFrom(memo)]), l.stranger)).rejects.toThrow(REFUSED);
+    await expect(l.send('icrc2_transfer_from', enc([TransferFromArgs], [transferFrom([bytes(80)])]), l.stranger)).resolves.toBeDefined();
     await expect(l.send('burn', enc([BurnArgs], [burn(memo)]), l.alice)).rejects.toThrow(REFUSED);
     await expect(l.send('mint', enc([MintArgs], [mint(memo)]), l.installer)).rejects.toThrow(REFUSED);
     await expect(l.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.stranger, bytes(81))]]), l.alice)).rejects.toThrow(REFUSED);
@@ -793,7 +975,34 @@ describe('inspect: field validation of updates', () => {
     await expect(l.send('icrc1_transfer', enc([TransferArgs], [absurd]), l.alice)).rejects.toThrow(REFUSED);
   });
 
+  it('follows the memo bound when the owner changes it', async () => {
+    const c = await Ledger.create({ maxTransfers: 100, maxBalances: 100 });
+    try {
+      const transfer = (memo: number) => enc([TransferArgs], [smallTransfer(c.alice, bytes(memo))]);
+      await expect(c.send('icrc1_transfer', transfer(100), c.stranger)).rejects.toThrow(REFUSED);
+      // A full batch of 100-byte memos does not fit the limit of 80-byte ones.
+      const full = enc([ICRC4TransferArgs], [Array(100).fill(maxTransfer(100))]);
+      expect(full.length).toBeGreaterThan(transferBatchCap(100, 80));
+      await expect(c.send('icrc4_transfer_batch', full, c.stranger)).rejects.toThrow(REFUSED);
+
+      await c.send('admin_update_icrc1', enc([IDL.Vec(Icrc1InfoRequest)], [[{ MaxMemo: 100n }]]), c.installer);
+
+      await expect(c.send('icrc1_transfer', transfer(100), c.stranger)).resolves.toBeDefined();
+      await expect(c.send('icrc1_transfer', transfer(101), c.stranger)).rejects.toThrow(REFUSED);
+      expect(full.length).toBeLessThanOrEqual(transferBatchCap(100, 100));
+      await expect(c.send('icrc4_transfer_batch', full, c.stranger)).resolves.toBeDefined();
+      await expect(c.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(c.alice, bytes(101))]]), c.stranger)).rejects.toThrow(REFUSED);
+    } finally {
+      await c.tearDown();
+    }
+  }, 120_000);
+
   it('refuses an absurd amount or fee inside a batch', async () => {
+    // The bound itself: 10^40 - 1 is the largest amount admitted, 10^40 the first refused.
+    const atBound = [smallTransfer(l.stranger, null, 10n ** 40n - 1n), { ...smallTransfer(l.stranger), fee: [10n ** 40n - 1n] }];
+    await expect(l.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [atBound]), l.alice)).resolves.toBeDefined();
+    await expect(l.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.stranger, null, 10n ** 40n)]]), l.alice)).rejects.toThrow(REFUSED);
+    await expect(l.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[{ ...smallTransfer(l.stranger), fee: [10n ** 40n] }]]), l.alice)).rejects.toThrow(REFUSED);
     const absurd = BigInt('9'.repeat(41));
     const amount = [smallTransfer(l.stranger), smallTransfer(l.stranger, null, absurd)];
     const fee = [{ ...smallTransfer(l.stranger), fee: [absurd] }];
