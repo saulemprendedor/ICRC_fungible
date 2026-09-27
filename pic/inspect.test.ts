@@ -604,25 +604,37 @@ describe('inspect: the named exceptions', () => {
   it('a consent request is held to the rules of the call it wraps', async () => {
     const ask = (method: string, inner: Uint8Array, sender = l.anonymous) =>
       l.send('icrc21_canister_call_consent_message', enc([ConsentMessageRequest], [consentFor(method, inner)]), sender);
-    const giant = 1n << (7n * 10_000n - 1n); // a number that takes 10 000 bytes
+    // A number that takes 4 000 bytes: under the size limit of a wrapped call, so only the
+    // validation of the amount can refuse it.
+    const giant = 1n << (7n * 4_000n - 1n);
 
     // Positive control: the same requests, well formed, are answered and paid for.
-    const admitted = await l.spent(async () => {
-      await ask('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice)]]));
-      await ask('icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice)]));
-    });
-    expect(admitted).toBeGreaterThanOrEqual(2n * 5_000_000n);
-
     const spender = { owner: l.stranger, subaccount: [] };
-    const approve = { fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: giant, expected_allowance: [], expires_at: [], spender };
-    const transferFrom = { to: spender, fee: [], spender_subaccount: [], from: spender, memo: [], created_at_time: [], amount: giant };
+    const approve = (amount: bigint, memo: number[][] = [], expected: bigint[] = []) =>
+      enc([ApproveArgs], [{ fee: [], memo, from_subaccount: [], created_at_time: [], amount, expected_allowance: expected, expires_at: [], spender }]);
+    const transferFrom = (amount: bigint, memo: number[][] = []) =>
+      enc([TransferFromArgs], [{ to: spender, fee: [], spender_subaccount: [], from: spender, memo, created_at_time: [], amount }]);
+    const largest = 10n ** 40n - 1n;
+
+    const admitted = await l.spent(async () => {
+      await ask('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice, bytes(80), largest)]]));
+      await ask('icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, bytes(80), largest)]));
+      await ask('icrc2_approve', approve(largest, [bytes(80)], [largest]));
+      await ask('icrc2_transfer_from', transferFrom(largest, [bytes(80)]));
+    });
+    expect(admitted).toBeGreaterThanOrEqual(4n * 5_000_000n);
     const refused: Array<[string, string, Uint8Array]> = [
       ['a giant amount in a batch', 'icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice, null, giant)]])],
       ['a 41-digit amount in a batch', 'icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.alice, null, 10n ** 40n)]])],
       ['a giant amount in a transfer', 'icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, null, giant)])],
       ['a 41-digit amount in a transfer', 'icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, null, 10n ** 40n)])],
-      ['a giant amount in an approval', 'icrc2_approve', enc([ApproveArgs], [approve])],
-      ['a giant amount in a transfer_from', 'icrc2_transfer_from', enc([TransferFromArgs], [transferFrom])],
+      ['a giant amount in an approval', 'icrc2_approve', approve(giant)],
+      ['a 41-digit amount in an approval', 'icrc2_approve', approve(10n ** 40n)],
+      ['a 41-digit expected allowance in an approval', 'icrc2_approve', approve(1n, [], [10n ** 40n])],
+      ['an 81-byte memo in an approval', 'icrc2_approve', approve(1n, [bytes(81)])],
+      ['a giant amount in a transfer_from', 'icrc2_transfer_from', transferFrom(giant)],
+      ['a 41-digit amount in a transfer_from', 'icrc2_transfer_from', transferFrom(10n ** 40n)],
+      ['an 81-byte memo in a transfer_from', 'icrc2_transfer_from', transferFrom(1n, [bytes(81)])],
       ['an 81-byte memo in a transfer', 'icrc1_transfer', enc([TransferArgs], [smallTransfer(l.alice, bytes(81))])],
       ['a batch that is not a batch', 'icrc4_transfer_batch', enc([IDL.Text], ['not a batch'])],
       ['one entry padded to the size of many', 'icrc4_transfer_batch', encodeExactly([ICRC4TransferArgs], [[smallTransfer(l.alice)]], transferBatchBytes(1) + 1)],
@@ -966,6 +978,28 @@ describe('inspect: field validation of updates', () => {
     await expect(l.send('burn', enc([BurnArgs], [burn(ok)]), l.alice)).resolves.toBeDefined();
     await expect(l.send('mint', enc([MintArgs], [mint(ok)]), l.installer)).resolves.toBeDefined();
     await expect(l.send('icrc4_transfer_batch', enc([ICRC4TransferArgs], [[smallTransfer(l.stranger, bytes(80))]]), l.alice)).resolves.toBeDefined();
+  });
+
+  it('refuses a number of kilobytes by the filter, not by running out of instructions', async () => {
+    // Counting the digits of such a number exceeds what `inspect` may execute. The
+    // message was refused either way, but by the instruction limit and with its error.
+    const giant = 1n << (7n * 4_000n - 1n);
+    const to = { owner: l.stranger, subaccount: [] };
+    const calls: Array<[string, Uint8Array, Principal]> = [
+      ['icrc1_transfer', enc([TransferArgs], [smallTransfer(l.stranger, null, giant)]), l.alice],
+      ['icrc1_transfer', enc([TransferArgs], [{ ...smallTransfer(l.stranger), fee: [giant] }]), l.alice],
+      ['icrc2_approve', enc([ApproveArgs], [{ fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: giant, expected_allowance: [], expires_at: [], spender: to }]), l.alice],
+      ['icrc2_approve', enc([ApproveArgs], [{ fee: [], memo: [], from_subaccount: [], created_at_time: [], amount: 1n, expected_allowance: [giant], expires_at: [], spender: to }]), l.alice],
+      ['icrc2_transfer_from', enc([TransferFromArgs], [{ to, fee: [], spender_subaccount: [], from: to, memo: [], created_at_time: [], amount: giant }]), l.alice],
+      ['burn', enc([BurnArgs], [{ from_subaccount: [], amount: giant, memo: [], created_at_time: [] }]), l.alice],
+      ['mint', enc([MintArgs], [{ to, amount: giant, memo: [], created_at_time: [] }]), l.installer],
+    ];
+    const spent = await l.spent(async () => {
+      for (const [method, arg, sender] of calls) {
+        await expect(l.send(method, arg, sender), method).rejects.toThrow(REFUSED);
+      }
+    });
+    expect(spent).toBeLessThan(1_000_000n);
   });
 
   it('refuses an oversized subaccount and an absurd amount', async () => {

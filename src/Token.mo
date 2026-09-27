@@ -587,9 +587,32 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     };
   };
 
-  /// The largest Nat a batch entry may carry: the 40 digits the library's
-  /// validators allow, as a comparison.
-  transient let BATCH_NAT_BOUND : Nat = 10 ** 40;
+  /// The largest amount or fee a call may carry: the 40 digits the library's
+  /// validators allow, as a comparison. The validators count digits, which
+  /// formats the number: on a number of a few kilobytes that alone exceeds
+  /// what `inspect` may execute, and the message is then refused by the
+  /// instruction limit instead of by this filter. So every amount is compared
+  /// here before a validator sees it.
+  transient let NAT_BOUND : Nat = 10 ** 40;
+
+  func bounded(n : Nat) : Bool { n < NAT_BOUND };
+
+  func boundedOpt(n : ?Nat) : Bool {
+    switch (n) { case (?value) value < NAT_BOUND; case (null) true };
+  };
+
+  func validTransfer(args : ICRC1.TransferArgs, config : ICRC1Inspect.Config) : Bool {
+    bounded(args.amount) and boundedOpt(args.fee) and ICRC1Inspect.inspectTransfer(args, ?config);
+  };
+
+  func validApprove(args : ICRC2.ApproveArgs, config : ICRC2Inspect.Config) : Bool {
+    bounded(args.amount) and boundedOpt(args.expected_allowance) and boundedOpt(args.fee)
+    and ICRC2Inspect.inspectApprove(args, ?config);
+  };
+
+  func validTransferFrom(args : ICRC2.TransferFromArgs, config : ICRC2Inspect.Config) : Bool {
+    bounded(args.amount) and boundedOpt(args.fee) and ICRC2Inspect.inspectTransferFrom(args, ?config);
+  };
 
   /// The checks of the library's `inspectTransferBatch`, with the Nat bound as
   /// a comparison instead of a digit count. Counting digits formats the number,
@@ -605,11 +628,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       if (not validBlob(transfer.from_subaccount, 32)) return false;
       if (not validBlob(transfer.to.subaccount, 32)) return false;
       if (not validBlob(transfer.memo, maxMemo)) return false;
-      if (transfer.amount >= BATCH_NAT_BOUND) return false;
-      switch (transfer.fee) {
-        case (?fee) { if (fee >= BATCH_NAT_BOUND) return false };
-        case (null) {};
-      };
+      if (not bounded(transfer.amount)) return false;
+      if (not boundedOpt(transfer.fee)) return false;
     };
     true;
   };
@@ -667,15 +687,15 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     if (request.arg.size() > DEFAULT_ARG_CAP) return false;
     if (request.method == "icrc1_transfer") {
       let ?args : ?ICRC1.TransferArgs = from_candid (request.arg) else return false;
-      return ICRC1Inspect.inspectTransfer(args, ?icrc1Config);
+      return validTransfer(args, icrc1Config);
     };
     if (request.method == "icrc2_approve") {
       let ?args : ?ICRC2.ApproveArgs = from_candid (request.arg) else return false;
-      return ICRC2Inspect.inspectApprove(args, ?icrc2Config);
+      return validApprove(args, icrc2Config);
     };
     if (request.method == "icrc2_transfer_from") {
       let ?args : ?ICRC2.TransferFromArgs = from_candid (request.arg) else return false;
-      return ICRC2Inspect.inspectTransferFrom(args, ?icrc2Config);
+      return validTransferFrom(args, icrc2Config);
     };
     true;
   };
@@ -759,16 +779,16 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         ICRC1Inspect.inspectBalanceOf(getArgs(), ?icrc1Config);
       };
       case (#icrc1_transfer(getArgs)) {
-        ICRC1Inspect.inspectTransfer(getArgs(), ?icrc1Config);
+        validTransfer(getArgs(), icrc1Config);
       };
       case (#icrc2_allowance(getArgs)) {
         ICRC2Inspect.inspectAllowance(getArgs(), ?icrc2Config);
       };
       case (#icrc2_approve(getArgs)) {
-        ICRC2Inspect.inspectApprove(getArgs(), ?icrc2Config);
+        validApprove(getArgs(), icrc2Config);
       };
       case (#icrc2_transfer_from(getArgs)) {
-        ICRC2Inspect.inspectTransferFrom(getArgs(), ?icrc2Config);
+        validTransferFrom(getArgs(), icrc2Config);
       };
       case (#icrc103_get_allowances(getArgs)) {
         ICRC2Inspect.inspectGetAllowances(getArgs(), ?icrc2Config);
@@ -805,7 +825,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         validConsentRequest(request, arg.size(), maxMemo, icrc1Config, icrc2Config);
       };
       case (#burn(getArgs)) {
-        ICRC1Inspect.inspectBurn(getArgs(), ?icrc1Config);
+        let args = getArgs();
+        bounded(args.amount) and ICRC1Inspect.inspectBurn(args, ?icrc1Config);
       };
 
       // ---- The current owner only, as the bodies have it ----
@@ -813,7 +834,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         if (caller != owner) return false;
         let args = getArgs();
         ICRC1Inspect.isValidAccount(args.to, icrc1Config) and
-        ICRC1Inspect.isValidNat(args.amount, icrc1Config) and
+        bounded(args.amount) and
         ICRC1Inspect.isValidMemo(args.memo, icrc1Config);
       };
       case (
