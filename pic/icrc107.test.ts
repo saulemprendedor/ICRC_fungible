@@ -375,12 +375,15 @@ describe('ICRC-107 Fee Collector Management Tests', () => {
     expect(account.owner.toText()).toEqual(feeCollectorIdentity.getPrincipal().toText());
   });
 
-  it('should reject non-owner with AccessDenied', async () => {
+  // A non-owner no longer reaches the body by ingress: `inspect` refuses the
+  // message first. The body's typed `AccessDenied` is proven through a caller
+  // canister in inspect.test.ts ("the body guards still decide, past the filter").
+  it('should refuse a non-owner at ingress', async () => {
     const now = nowNanos();
     await pic.setTime(Number(now / 1_000_000n));
     await pic.tick(2);
 
-    const result = await pic.updateCall({
+    await expect(pic.updateCall({
       canisterId: tokenCanisterId,
       method: 'icrc107_set_fee_collector',
       arg: IDL.encode([SetFeeCollectorArgs], [{
@@ -388,11 +391,7 @@ describe('ICRC-107 Fee Collector Management Tests', () => {
         created_at_time: now,
       }]),
       sender: nonAdmin.getPrincipal(),
-    });
-
-    const decoded = IDL.decode([SetFeeCollectorResult], result)[0] as any;
-    expect(decoded.Err).toBeDefined();
-    expect(decoded.Err.AccessDenied).toBeDefined();
+    })).rejects.toThrow(/inspect_message/i);
   });
 
   it('should reject duplicate created_at_time', async () => {

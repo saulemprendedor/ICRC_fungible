@@ -6,6 +6,7 @@ import Runtime "mo:core/Runtime";
 import Int "mo:core/Int";
 import Iter "mo:core/Iter";
 import List "mo:core/List";
+import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
 import Time "mo:core/Time";
 
@@ -454,121 +455,344 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   // Message Inspection - Cycle Drain Protection
   //============================================================================
 
-  /// Inspect ingress messages before they are processed.
-  /// Rejects calls with oversized unbounded arguments to prevent cycle drain attacks.
-  /// Reference: https://motoko-book.dev/advanced-concepts/system-apis/message-inspection.html
-  /// 
-  /// IMPORTANT: The `arg` blob size check is the CHEAPEST operation - do it first!
-  /// This prevents expensive decoding of maliciously large messages.
+  type InspectMsg = {
+    // ICRC-1 endpoints
+    #icrc1_name : () -> ();
+    #icrc1_symbol : () -> ();
+    #icrc1_decimals : () -> ();
+    #icrc1_fee : () -> ();
+    #icrc1_metadata : () -> ();
+    #icrc1_total_supply : () -> ();
+    #icrc1_minting_account : () -> ();
+    #icrc1_balance_of : () -> ICRC1.Account;
+    #icrc1_supported_standards : () -> ();
+    #icrc1_transfer : () -> ICRC1.TransferArgs;
+    #icrc10_supported_standards : () -> ();
+
+    // ICRC-2 endpoints
+    #icrc2_allowance : () -> ICRC2.AllowanceArgs;
+    #icrc2_approve : () -> ICRC2.ApproveArgs;
+    #icrc2_transfer_from : () -> ICRC2.TransferFromArgs;
+    #icrc103_get_allowances : () -> ICRC2.GetAllowancesArgs;
+
+    // ICRC-3 endpoints
+    #icrc3_get_blocks : () -> ICRC3.GetBlocksArgs;
+    #icrc3_get_archives : () -> ICRC3.GetArchivesArgs;
+    #icrc3_get_tip_certificate : () -> ();
+    #icrc3_supported_block_types : () -> ();
+    #get_blocks : () -> { start : Nat; length : Nat };
+    #get_transactions : () -> { start : Nat; length : Nat };
+    #get_tip : () -> ();
+    #archives : () -> ();
+
+    // ICRC-4 endpoints
+    #icrc4_transfer_batch : () -> ICRC4.TransferBatchArgs;
+    #icrc4_balance_of_batch : () -> ICRC4.BalanceQueryArgs;
+    #icrc4_maximum_update_batch_size : () -> ();
+    #icrc4_maximum_query_batch_size : () -> ();
+
+    // ICRC-106 endpoints
+    #icrc106_get_index_principal : () -> ();
+    #set_icrc106_index_principal : () -> ?Principal;
+
+    // ICRC-107 endpoints
+    #icrc107_set_fee_collector : () -> ICRC1.SetFeeCollectorArgs;
+    #icrc107_get_fee_collector : () -> ();
+
+    // ICRC-21 endpoints
+    #icrc21_canister_call_consent_message : () -> ICRC1.ConsentMessageRequest;
+
+    // Legacy / Candid parity endpoints
+    #get_data_certificate : () -> ();
+    #is_ledger_ready : () -> ();
+
+    // Admin endpoints
+    #admin_update_owner : () -> Principal;
+    #admin_update_icrc1 : () -> [ICRC1.UpdateLedgerInfoRequest];
+    #admin_update_icrc2 : () -> [ICRC2.UpdateLedgerInfoRequest];
+    #admin_update_icrc4 : () -> [ICRC4.UpdateLedgerInfoRequest];
+    #admin_set_index_canister : () -> ?Principal;
+    #admin_init : () -> ();
+
+    // Other endpoints
+    #mint : () -> ICRC1.Mint;
+    #burn : () -> ICRC1.BurnArgs;
+    #get_icrc85_stats : () -> ();
+    #getUpgradeError : () -> ();
+    #upgradeArchive : () -> Bool;
+    #update_archive_controllers : () -> ();
+    #get_index_canister : () -> ();
+    #deposit_cycles : () -> ();
+    #get_health : () -> ();
+  };
+
+  /// Ingress size limit of every method that is not named in `argCap`.
+  /// Measured with Candid encoding of maximal arguments (29-byte principals,
+  /// 32-byte subaccounts, 40-digit Nats, every optional field set, 80-byte
+  /// memo): icrc1_transfer 293 B, icrc2_approve 336 B, icrc2_transfer_from
+  /// 364 B, icrc3_get_blocks with 100 ranges 3 824 B. Everything else is smaller.
+  transient let DEFAULT_ARG_CAP : Nat = 5_120;
+
+  /// One maximal batch entry measures 149 B plus its memo (229 B with an
+  /// 80-byte memo): a 29-byte principal, both subaccounts of 32 bytes, amount
+  /// and fee of 40 digits, `created_at_time` set. A 200-entry batch is
+  /// 45 868 B, of which 68 B are the type table and the vector.
+  transient let TRANSFER_ENTRY_BYTES : Nat = 149;
+  /// One maximal account measures 65 B: a 29-byte principal and a 32-byte
+  /// subaccount. A 200-account query is 13 037 B, of which 37 B are framing.
+  transient let BALANCE_ENTRY_BYTES : Nat = 65;
+  /// Margin over the measured framing of a batch (68 B and 37 B).
+  transient let BATCH_FRAMING_BYTES : Nat = 256;
+  /// What a consent request adds around the call it wraps: the method name
+  /// (the library refuses more than 256 B), the language tag and the device
+  /// spec. Measured around a full batch: 103 B with a 20-byte method name,
+  /// 375 B with a 256-byte one and a 35-byte language tag.
+  transient let CONSENT_FRAMING_BYTES : Nat = 512;
+  /// A ledger-info update that carries a logo. Measured by Candid-encoding a
+  /// 110 214-byte data URI plus a rename in the same call: about 110.3 KB (the
+  /// exact figure moves with the type table the client sends).
+  /// Only the owner gets it.
+  transient let OWNER_INFO_ARG_CAP : Nat = 160_000;
+  /// No batch limit, however configured, opens more than this. Without it
+  /// `max_transfers = 10 000` would admit 2.29 MB from any caller.
+  transient let BATCH_ARG_CEILING : Nat = 1_048_576;
+
+  // The three readers below look at the persisted state directly. They must
+  // stay pure: `inspect` runs on one replica, outside consensus, and whatever
+  // it writes is discarded — so they never go through the lazily initialised
+  // classes (`icrc1()`, `icrc4()`).
+  func configuredMaxMemo() : Nat {
+    switch (icrc1_migration_state) {
+      case (#v0_2_0(#data(state))) state.max_memo;
+      case (#v0_1_0(#data(state))) state.max_memo;
+      // Not initialised yet. Every version is listed: a new one must not
+      // compile until somebody says where its limit lives.
+      case (#v0_0_0 _ or #v0_1_0(#id) or #v0_2_0(#id)) ICRC1Inspect.defaultConfig.maxMemoSize;
+    };
+  };
+
+  func configuredMaxTransfers() : Nat {
+    switch (icrc4_migration_state) {
+      case (#v0_2_0(#data(state))) state.ledger_info.max_transfers;
+      case (#v0_1_0(#data(state))) state.ledger_info.max_transfers;
+      case (#v0_0_0 _ or #v0_1_0(#id) or #v0_2_0(#id)) 0;
+    };
+  };
+
+  func configuredMaxBalances() : Nat {
+    switch (icrc4_migration_state) {
+      case (#v0_2_0(#data(state))) state.ledger_info.max_balances;
+      case (#v0_1_0(#data(state))) state.ledger_info.max_balances;
+      case (#v0_0_0 _ or #v0_1_0(#id) or #v0_2_0(#id)) 0;
+    };
+  };
+
+  /// The largest amount or fee a call may carry: the 40 digits the library's
+  /// validators allow, as a comparison. The validators count digits, which
+  /// formats the number: on a number of a few kilobytes that alone exceeds
+  /// what `inspect` may execute, and the message is then refused by the
+  /// instruction limit instead of by this filter. So every amount is compared
+  /// here before a validator sees it.
+  transient let NAT_BOUND : Nat = 10 ** 40;
+
+  func bounded(n : Nat) : Bool { n < NAT_BOUND };
+
+  func boundedOpt(n : ?Nat) : Bool {
+    switch (n) { case (?value) value < NAT_BOUND; case (null) true };
+  };
+
+  func validTransfer(args : ICRC1.TransferArgs, config : ICRC1Inspect.Config) : Bool {
+    bounded(args.amount) and boundedOpt(args.fee) and ICRC1Inspect.inspectTransfer(args, ?config);
+  };
+
+  func validApprove(args : ICRC2.ApproveArgs, config : ICRC2Inspect.Config) : Bool {
+    bounded(args.amount) and boundedOpt(args.expected_allowance) and boundedOpt(args.fee)
+    and ICRC2Inspect.inspectApprove(args, ?config);
+  };
+
+  func validTransferFrom(args : ICRC2.TransferFromArgs, config : ICRC2Inspect.Config) : Bool {
+    bounded(args.amount) and boundedOpt(args.fee) and ICRC2Inspect.inspectTransferFrom(args, ?config);
+  };
+
+  /// The checks of the library's `inspectTransferBatch`, with the Nat bound as
+  /// a comparison instead of a digit count. Counting digits formats the number,
+  /// and on a full batch of large amounts that alone exceeds what `inspect` may
+  /// execute: measured, 150 entries with 40-digit amount and fee hit the
+  /// 200 M instruction limit, so the largest legitimate batch was refused.
+  func validTransferBatch(batch : ICRC4.TransferBatchArgs, maxMemo : Nat) : Bool {
+    if (batch.size() == 0 or batch.size() > configuredMaxTransfers()) return false;
+    let validBlob = func(blob : ?Blob, limit : Nat) : Bool {
+      switch (blob) { case (null) true; case (?b) b.size() <= limit };
+    };
+    for (transfer in batch.vals()) {
+      if (not validBlob(transfer.from_subaccount, 32)) return false;
+      if (not validBlob(transfer.to.subaccount, 32)) return false;
+      if (not validBlob(transfer.memo, maxMemo)) return false;
+      if (not bounded(transfer.amount)) return false;
+      if (not boundedOpt(transfer.fee)) return false;
+    };
+    true;
+  };
+
+  /// What `entries` maximal transfers measure, with the margin.
+  func transferBatchBytes(entries : Nat) : Nat {
+    entries * (TRANSFER_ENTRY_BYTES + configuredMaxMemo()) + BATCH_FRAMING_BYTES;
+  };
+
+  /// What `entries` maximal accounts measure, with the margin.
+  func balanceBatchBytes(entries : Nat) : Nat {
+    entries * BALANCE_ENTRY_BYTES + BATCH_FRAMING_BYTES;
+  };
+
+  func transferBatchCap() : Nat {
+    Nat.min(BATCH_ARG_CEILING, Nat.max(DEFAULT_ARG_CAP, transferBatchBytes(configuredMaxTransfers())));
+  };
+
+  func balanceBatchCap() : Nat {
+    Nat.min(BATCH_ARG_CEILING, Nat.max(DEFAULT_ARG_CAP, balanceBatchBytes(configuredMaxBalances())));
+  };
+
+  /// Whether a blob starts with the Candid magic bytes, "DIDL". Decoding one
+  /// that does not traps, and a trap in `inspect` refuses the message.
+  func isCandid(blob : Blob) : Bool {
+    if (blob.size() < 4) return false;
+    blob[0] == 0x44 and blob[1] == 0x49 and blob[2] == 0x44 and blob[3] == 0x4C;
+  };
+
+  /// A consent request is a read, open to every caller, and its body FORMATS
+  /// the amounts of the call it wraps. So the wrapped call is held here to
+  /// the rules of the method it names — measured without them: a request
+  /// wrapping one transfer whose amount is a 1 KB number cost the canister
+  /// 6.0 B cycles, and from 10 KB on it ran into the instruction limit of the
+  /// message at 10.0 B cycles, from the anonymous principal.
+  ///
+  /// Only a request that wraps a batch may be larger than the default, and
+  /// only by what its entries account for. A method this ledger has no rule
+  /// for passes when it is small: its body answers without decoding anything.
+  func validConsentRequest(
+    request : ICRC1.ConsentMessageRequest,
+    requestBytes : Nat,
+    maxMemo : Nat,
+    icrc1Config : ICRC1Inspect.Config,
+    icrc2Config : ICRC2Inspect.Config,
+  ) : Bool {
+    if (requestBytes > request.arg.size() + CONSENT_FRAMING_BYTES) return false;
+    // Not Candid at all: nothing to validate and nothing the body can format.
+    // It answers with its typed error, which a small request may have.
+    if (not isCandid(request.arg)) return request.arg.size() <= DEFAULT_ARG_CAP;
+    if (request.method == "icrc4_transfer_batch") {
+      let ?batch : ?ICRC4.TransferBatchArgs = from_candid (request.arg) else return false;
+      return request.arg.size() <= transferBatchBytes(batch.size()) and validTransferBatch(batch, maxMemo);
+    };
+    if (request.arg.size() > DEFAULT_ARG_CAP) return false;
+    if (request.method == "icrc1_transfer") {
+      let ?args : ?ICRC1.TransferArgs = from_candid (request.arg) else return false;
+      return validTransfer(args, icrc1Config);
+    };
+    if (request.method == "icrc2_approve") {
+      let ?args : ?ICRC2.ApproveArgs = from_candid (request.arg) else return false;
+      return validApprove(args, icrc2Config);
+    };
+    if (request.method == "icrc2_transfer_from") {
+      let ?args : ?ICRC2.TransferFromArgs = from_candid (request.arg) else return false;
+      return validTransferFrom(args, icrc2Config);
+    };
+    true;
+  };
+
+  /// The ingress size limit of each method. Every method is listed, so a new
+  /// one does not compile until it is classified here, and it gets more than
+  /// the default only on purpose. The batch limits follow the ledger's own
+  /// configuration, so raising `max_transfers` raises the cap with it, up to
+  /// `BATCH_ARG_CEILING`.
+  ///
+  /// Every other method stays at the default whatever `max_memo` is: a ledger
+  /// configured with a memo bound above ~4 800 bytes would have its larger
+  /// memos refused here although the body accepts them.
+  func argCap(msg : InspectMsg, caller : Principal) : Nat {
+    switch (msg) {
+      case (#icrc4_transfer_batch _) transferBatchCap();
+      case (#icrc4_balance_of_batch _) balanceBatchCap();
+      // A wallet asks for the consent text of the call it is about to sign,
+      // and the largest such call is a full batch.
+      case (#icrc21_canister_call_consent_message _) transferBatchCap() + CONSENT_FRAMING_BYTES;
+      case (#admin_update_icrc1 _) {
+        if (caller == owner) OWNER_INFO_ARG_CAP else DEFAULT_ARG_CAP;
+      };
+      case (
+        #icrc1_name _ or #icrc1_symbol _ or #icrc1_decimals _ or #icrc1_fee _
+        or #icrc1_metadata _ or #icrc1_total_supply _ or #icrc1_minting_account _
+        or #icrc1_balance_of _ or #icrc1_supported_standards _ or #icrc1_transfer _
+        or #icrc10_supported_standards _ or #icrc2_allowance _ or #icrc2_approve _
+        or #icrc2_transfer_from _ or #icrc103_get_allowances _ or #icrc3_get_blocks _
+        or #icrc3_get_archives _ or #icrc3_get_tip_certificate _
+        or #icrc3_supported_block_types _ or #get_blocks _ or #get_transactions _
+        or #get_tip _ or #archives _ or #icrc4_maximum_update_batch_size _
+        or #icrc4_maximum_query_batch_size _ or #icrc106_get_index_principal _
+        or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
+        or #icrc107_get_fee_collector _ or #get_data_certificate _ or #is_ledger_ready _
+        or #admin_update_owner _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
+        or #admin_set_index_canister _ or #admin_init _ or #mint _ or #burn _
+        or #get_icrc85_stats _ or #getUpgradeError _ or #upgradeArchive _
+        or #update_archive_controllers _ or #get_index_canister _ or #deposit_cycles _
+        or #get_health _
+      ) DEFAULT_ARG_CAP;
+    };
+  };
+
+  /// Filters ingress messages before the canister pays for them.
+  ///
+  /// This is a cycles optimisation ONLY, never the access control: it runs on
+  /// a single replica, outside consensus, and never for inter-canister calls.
+  /// Every guard in the method bodies stays and is what actually decides.
+  ///
+  /// Three rules:
+  ///  1. Size first, per method (`argCap`). Nobody gets a larger limit for
+  ///     having installed or for controlling the canister.
+  ///  2. A method whose body admits one principal is refused here for anyone
+  ///     else, with the same predicate the body applies. For the owner that is
+  ///     the CURRENT `owner`, which `admin_update_owner` changes. It is not
+  ///     `_owner`, the class parameter, which is whoever performed the last
+  ///     install or upgrade of the canister.
+  ///  3. Reads stay open to every caller, the anonymous principal included,
+  ///     when they arrive as update calls. Wallets and indexers read balances,
+  ///     allowances and blocks through certified update calls; refusing them
+  ///     would break those clients. They are held to the default size limit.
   system func inspect(
     {
       caller : Principal;
-      arg : Blob;  // Raw message blob - check size FIRST
-      msg : {
-        // ICRC-1 endpoints
-        #icrc1_name : () -> ();
-        #icrc1_symbol : () -> ();
-        #icrc1_decimals : () -> ();
-        #icrc1_fee : () -> ();
-        #icrc1_metadata : () -> ();
-        #icrc1_total_supply : () -> ();
-        #icrc1_minting_account : () -> ();
-        #icrc1_balance_of : () -> ICRC1.Account;
-        #icrc1_supported_standards : () -> ();
-        #icrc1_transfer : () -> ICRC1.TransferArgs;
-        #icrc10_supported_standards : () -> ();
-        
-        // ICRC-2 endpoints
-        #icrc2_allowance : () -> ICRC2.AllowanceArgs;
-        #icrc2_approve : () -> ICRC2.ApproveArgs;
-        #icrc2_transfer_from : () -> ICRC2.TransferFromArgs;
-        #icrc103_get_allowances : () -> ICRC2.GetAllowancesArgs;
-        
-        // ICRC-3 endpoints
-        #icrc3_get_blocks : () -> ICRC3.GetBlocksArgs;
-        #icrc3_get_archives : () -> ICRC3.GetArchivesArgs;
-        #icrc3_get_tip_certificate : () -> ();
-        #icrc3_supported_block_types : () -> ();
-        #get_blocks : () -> { start : Nat; length : Nat };
-        #get_transactions : () -> { start : Nat; length : Nat };
-        #get_tip : () -> ();
-        #archives : () -> ();
-        
-        // ICRC-4 endpoints
-        #icrc4_transfer_batch : () -> ICRC4.TransferBatchArgs;
-        #icrc4_balance_of_batch : () -> ICRC4.BalanceQueryArgs;
-        #icrc4_maximum_update_batch_size : () -> ();
-        #icrc4_maximum_query_batch_size : () -> ();
-        
-        // ICRC-106 endpoints
-        #icrc106_get_index_principal : () -> ();
-        #set_icrc106_index_principal : () -> ?Principal;
-        
-        // ICRC-107 endpoints
-        #icrc107_set_fee_collector : () -> ICRC1.SetFeeCollectorArgs;
-        #icrc107_get_fee_collector : () -> ();
-        
-        // ICRC-21 endpoints
-        #icrc21_canister_call_consent_message : () -> ICRC1.ConsentMessageRequest;
-        
-        // Legacy / Candid parity endpoints
-        #get_data_certificate : () -> ();
-        #is_ledger_ready : () -> ();
-        
-        // Admin endpoints
-        #admin_update_owner : () -> Principal;
-        #admin_update_icrc1 : () -> [ICRC1.UpdateLedgerInfoRequest];
-        #admin_update_icrc2 : () -> [ICRC2.UpdateLedgerInfoRequest];
-        #admin_update_icrc4 : () -> [ICRC4.UpdateLedgerInfoRequest];
-        #admin_set_index_canister : () -> ?Principal;
-        #admin_init : () -> ();
-        
-        // Other endpoints
-        #mint : () -> ICRC1.Mint;
-        #burn : () -> ICRC1.BurnArgs;
-        #get_icrc85_stats : () -> ();
-        #getUpgradeError : () -> ();
-        #upgradeArchive : () -> Bool;
-        #update_archive_controllers : () -> ();
-        #get_index_canister : () -> ();
-        #deposit_cycles : () -> ();
-        #get_health : () -> ();
-      };
+      arg : Blob;
+      msg : InspectMsg;
     }
   ) : Bool {
-    // FIRST: Check raw arg size - cheapest check, prevents expensive decoding
-    // Admin callers (owner/controller) are trusted and exempt from the size limit
-    // so large payloads (e.g. logo updates) can be applied via admin_update_icrc1.
-    let isAdmin = caller == _owner or Principal.isController(caller);
-    let maxArgSize : Nat = if (isAdmin) 2_000_000 else 50_000;
-    if (arg.size() > maxArgSize) {
-      return false;
-    };
-    
+    // FIRST, outside any arm: the cheapest check, before anything is decoded.
+    if (arg.size() > argCap(msg, caller)) return false;
+
+    // The memo bound is the ledger's configured one, not the library default.
+    let maxMemo = configuredMaxMemo();
+    let icrc1Config = { ICRC1Inspect.defaultConfig with maxMemoSize = maxMemo };
+    let icrc2Config = { ICRC2Inspect.defaultConfig with maxMemoSize = maxMemo };
+
     switch (msg) {
-      // ICRC-1 - validate unbounded args
+      // ---- Open to every caller: field validation only ----
       case (#icrc1_balance_of(getArgs)) {
-        ICRC1Inspect.inspectBalanceOf(getArgs(), null);
+        ICRC1Inspect.inspectBalanceOf(getArgs(), ?icrc1Config);
       };
       case (#icrc1_transfer(getArgs)) {
-        ICRC1Inspect.inspectTransfer(getArgs(), null);
+        validTransfer(getArgs(), icrc1Config);
       };
-      
-      // ICRC-2 - validate unbounded args
       case (#icrc2_allowance(getArgs)) {
-        ICRC2Inspect.inspectAllowance(getArgs(), null);
+        ICRC2Inspect.inspectAllowance(getArgs(), ?icrc2Config);
       };
       case (#icrc2_approve(getArgs)) {
-        ICRC2Inspect.inspectApprove(getArgs(), null);
+        validApprove(getArgs(), icrc2Config);
       };
       case (#icrc2_transfer_from(getArgs)) {
-        ICRC2Inspect.inspectTransferFrom(getArgs(), null);
+        validTransferFrom(getArgs(), icrc2Config);
       };
       case (#icrc103_get_allowances(getArgs)) {
-        ICRC2Inspect.inspectGetAllowances(getArgs(), null);
+        ICRC2Inspect.inspectGetAllowances(getArgs(), ?icrc2Config);
       };
-      
-      // ICRC-3 - validate unbounded args
       case (#icrc3_get_blocks(getArgs)) {
         ICRC3Inspect.inspectGetBlocks(getArgs(), null);
       };
@@ -581,63 +805,68 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       case (#get_transactions(getArgs)) {
         ICRC3Inspect.inspectLegacyBlocks(getArgs(), null);
       };
-      
-      // ICRC-4 - CRITICAL for batch operations
+      // A batch may weigh what its entries account for, not what the largest
+      // batch would: one entry padded to the cap is refused.
       case (#icrc4_transfer_batch(getArgs)) {
-        ICRC4Inspect.inspectTransferBatch(getArgs(), null);
+        let batch = getArgs();
+        arg.size() <= transferBatchBytes(batch.size()) and validTransferBatch(batch, maxMemo);
       };
       case (#icrc4_balance_of_batch(getArgs)) {
-        ICRC4Inspect.inspectBalanceOfBatch(getArgs(), null);
+        let query_ = getArgs();
+        arg.size() <= balanceBatchBytes(query_.accounts.size()) and
+        ICRC4Inspect.inspectBalanceOfBatch(query_, ?{
+          ICRC4Inspect.configWithLedgerLimits(configuredMaxTransfers(), configuredMaxBalances())
+          with maxMemoSize = maxMemo
+        });
       };
-      
-      // Mint/Burn - validate unbounded args
-      case (#mint(getArgs)) {
-        let args = getArgs();
-        // Mint has: to (Account), amount (Nat), memo (?Blob), created_at_time (?Nat64)
-        ICRC1Inspect.isValidAccount(args.to, ICRC1Inspect.defaultConfig) and
-        ICRC1Inspect.isValidNat(args.amount, ICRC1Inspect.defaultConfig) and
-        ICRC1Inspect.isValidMemo(args.memo, ICRC1Inspect.defaultConfig);
+      case (#icrc21_canister_call_consent_message(getArgs)) {
+        let request = getArgs();
+        ICRC1Inspect.inspectConsentMessage(request, ?icrc1Config) and
+        validConsentRequest(request, arg.size(), maxMemo, icrc1Config, icrc2Config);
       };
       case (#burn(getArgs)) {
-        ICRC1Inspect.inspectBurn(getArgs(), null);
+        let args = getArgs();
+        bounded(args.amount) and ICRC1Inspect.inspectBurn(args, ?icrc1Config);
       };
-      
-      // No validation needed - bounded types or no args
-      case (#icrc1_name(_)) true;
-      case (#icrc1_symbol(_)) true;
-      case (#icrc1_decimals(_)) true;
-      case (#icrc1_fee(_)) true;
-      case (#icrc1_metadata(_)) true;
-      case (#icrc1_total_supply(_)) true;
-      case (#icrc1_minting_account(_)) true;
-      case (#icrc1_supported_standards(_)) true;
-      case (#icrc10_supported_standards(_)) true;
-      case (#icrc3_get_tip_certificate(_)) true;
-      case (#icrc3_supported_block_types(_)) true;
-      case (#get_tip(_)) true;
-      case (#archives(_)) true;
-      case (#icrc4_maximum_update_batch_size(_)) true;
-      case (#icrc4_maximum_query_batch_size(_)) true;
-      case (#icrc106_get_index_principal(_)) true;
-      case (#set_icrc106_index_principal(_)) true;
-      case (#icrc107_set_fee_collector(_)) true;
-      case (#icrc107_get_fee_collector(_)) true;
-      case (#icrc21_canister_call_consent_message(_)) true;
-      case (#admin_update_owner(_)) true;
-      case (#admin_update_icrc1(_)) true;  // Admin-only, trusted caller
-      case (#admin_update_icrc2(_)) true;  // Admin-only, trusted caller
-      case (#admin_update_icrc4(_)) true;  // Admin-only, trusted caller
-      case (#admin_set_index_canister(_)) true;
-      case (#admin_init(_)) true;
-      case (#get_icrc85_stats(_)) true;
-      case (#getUpgradeError(_)) true;
-      case (#upgradeArchive(_)) true;
-      case (#update_archive_controllers(_)) true;
-      case (#get_index_canister(_)) true;
-      case (#deposit_cycles(_)) true;
-      case (#get_data_certificate(_)) true;
-      case (#is_ledger_ready(_)) true;
-      case (#get_health(_)) true;
+
+      // ---- The current owner only, as the bodies have it ----
+      case (#mint(getArgs)) {
+        if (caller != owner) return false;
+        let args = getArgs();
+        ICRC1Inspect.isValidAccount(args.to, icrc1Config) and
+        bounded(args.amount) and
+        ICRC1Inspect.isValidMemo(args.memo, icrc1Config);
+      };
+      case (
+        #admin_update_icrc1 _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
+        or #admin_update_owner _ or #admin_set_index_canister _
+        or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
+      ) caller == owner;
+
+      // ---- `_owner` only, as the bodies have it: the principal that performed
+      // the last install or upgrade, re-bound on every upgrade ----
+      // `getUpgradeError` is a read, but its body answers that principal alone
+      // and no wallet asks for it, so it is not part of the open reads.
+      case (#upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _) {
+        caller == _owner;
+      };
+
+      // ---- `_owner` or a controller, as the body has it ----
+      case (#admin_init _) caller == _owner or Principal.isController(caller);
+
+      // ---- Open to every caller: reads without an argument worth checking,
+      // and `deposit_cycles`, which anybody may use to fund the canister ----
+      case (
+        #icrc1_name _ or #icrc1_symbol _ or #icrc1_decimals _ or #icrc1_fee _
+        or #icrc1_metadata _ or #icrc1_total_supply _ or #icrc1_minting_account _
+        or #icrc1_supported_standards _ or #icrc10_supported_standards _
+        or #icrc3_get_tip_certificate _ or #icrc3_supported_block_types _
+        or #get_tip _ or #archives _ or #icrc4_maximum_update_batch_size _
+        or #icrc4_maximum_query_batch_size _ or #icrc106_get_index_principal _
+        or #icrc107_get_fee_collector _ or #get_icrc85_stats _ or #get_index_canister _
+        or #deposit_cycles _ or #get_data_certificate _ or #is_ledger_ready _
+        or #get_health _
+      ) true;
     };
   };
 

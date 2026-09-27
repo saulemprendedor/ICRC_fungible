@@ -9,7 +9,7 @@
 # local fork in vendor/) is what actually gets compiled — and gzips the result
 # into the paths the tests expect.
 #
-# Usage: bash pic/build-token-wasm.sh [canister ...]     (default: all four)
+# Usage: bash pic/build-token-wasm.sh [canister ...]     (default: all of them)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +21,7 @@ ALL=(
   "token-mixin:src/token-mixin.mo"
   "token_icrc85:pic/TokenWithICRC85.mo"
   "dummy_collector:pic/DummyCollector.mo"
+  "raw_caller:pic/RawCaller.mo"
 )
 
 MOC="$(mops toolchain bin moc)"

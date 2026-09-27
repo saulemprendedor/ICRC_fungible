@@ -26,6 +26,12 @@
           "gzip": true,
           "args": "-v --incremental-gc"
         },
+        "raw_caller": {
+          "type": "motoko",
+          "main": "pic/RawCaller.mo",
+          "gzip": true,
+          "args": "-v --incremental-gc"
+        },
         "prodtoken": {
           "type": "motoko",
           "gzip": true,
