@@ -322,19 +322,16 @@ describe('ICRC-106 Index Principal Tests', () => {
     expect(principalFromBlob.toText()).toEqual(fakeIndexPrincipal.toText());
   });
 
-  it('should reject non-controller setting index principal', async () => {
-    try {
-      await pic.updateCall({
-        canisterId: tokenCanisterId,
-        method: 'set_icrc106_index_principal',
-        arg: IDL.encode([IDL.Opt(IDL.Principal)], [[fakeIndexPrincipal2]]),
-        sender: nonAdmin.getPrincipal(),
-      });
-      // Should not reach here
-      expect.unreachable('Non-controller should not be able to set index principal');
-    } catch (e: any) {
-      expect(e.message).toContain('Unauthorized');
-    }
+  // A non-owner no longer reaches the body by ingress: `inspect` refuses the
+  // message first. The body's own "Unauthorized" is proven through a caller
+  // canister in inspect.test.ts ("the body guards still decide, past the filter").
+  it('should refuse a non-owner setting the index principal at ingress', async () => {
+    await expect(pic.updateCall({
+      canisterId: tokenCanisterId,
+      method: 'set_icrc106_index_principal',
+      arg: IDL.encode([IDL.Opt(IDL.Principal)], [[fakeIndexPrincipal2]]),
+      sender: nonAdmin.getPrincipal(),
+    })).rejects.toThrow(/inspect_message/i);
   });
 
   it('should update index principal and metadata when changed', async () => {
