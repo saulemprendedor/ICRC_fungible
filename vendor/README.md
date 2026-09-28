@@ -130,6 +130,9 @@ Every consumer's environment literal adds `get_archive_controllers = null`.
 Upstream also applied the controller set to the **first** archive only: the
 branch that creates the next archive when the last one is full never called
 `update_controllers`. That call is added, so every new archive gets the set.
+**Behaviour change** for any consumer with a managed `archiveControllers`:
+its second and later archives now get the configured controllers too, where
+upstream left them controlled by the ledger alone.
 
 The call stays fire-and-forget, as upstream has it.
 
