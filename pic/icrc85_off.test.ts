@@ -28,7 +28,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { PocketIc, PocketIcServer, SubnetStateType } from '@dfinity/pic';
 import { Principal } from '@icp-sdk/core/principal';
 import {
-  NAMESPACES, advanceDays, countByStream, archiveBlocks, archiveIdl, archives, countByNamespace, createIdentity,
+  NAMESPACES, advanceDays, countByStream, trace, archiveBlocks, archiveIdl, archives, countByNamespace, createIdentity,
   installCollector, installLedger, smallArchiveArgs, transferUntil, upgradeLedger, wasmPath,
 } from './archive_harness';
 
@@ -50,26 +50,29 @@ function expectNoGrowth(before: Record<string, number>, after: Record<string, nu
   }
 }
 
+// ONE server for the whole file. `PocketIcServer.start` names its port file
+// after `process.ppid`, so a second `start` in the same process can read the
+// port of a server already stopped and hang.
+let picServer: PocketIcServer;
+let pic: PocketIc;
+
+beforeAll(async () => {
+  picServer = await PocketIcServer.start();
+});
+
+afterAll(async () => {
+  await picServer?.stop();
+});
+
+beforeEach(async () => {
+  pic = await PocketIc.create(picServer.getUrl(), { application: [{ state: { type: SubnetStateType.New } }] });
+});
+
+afterEach(async () => {
+  await pic?.tearDown();
+});
+
 describe('ICRC-85 is off', () => {
-  let picServer: PocketIcServer;
-  let pic: PocketIc;
-
-  beforeAll(async () => {
-    picServer = await PocketIcServer.start();
-  });
-
-  afterAll(async () => {
-    await picServer?.stop();
-  });
-
-  beforeEach(async () => {
-    pic = await PocketIc.create(picServer.getUrl(), { application: [{ state: { type: SubnetStateType.New } }] });
-  });
-
-  afterEach(async () => {
-    await pic?.tearDown();
-  });
-
   it('positive control: the baseline ledger pays the default collector on every ledger stream', async () => {
     const collector = await installCollector(pic);
     const { id } = await installLedger(pic, BASELINE_WASM, owner, null);
@@ -140,9 +143,12 @@ describe('ICRC-85 is off', () => {
       blocksBefore.push(await archiveBlocks(archive, stats.first_block_index, stats.total_records));
     }
 
+    trace('upgrade ledger');
     await upgradeLedger(pic, id, TOKEN_WASM, owner, smallArchiveArgs({ perArchive: 60 }));
     ledger.setPrincipal(owner);
+    trace('upgradeArchive');
     await ledger.upgradeArchive(false);
+    trace('upgradeArchive returned');
     for (let i = 0; i < 5; i++) await pic.tick();
     expect(await ledger.getUpgradeError()).toBe('');
 
@@ -162,25 +168,6 @@ describe('ICRC-85 is off', () => {
 });
 
 describe('a new archive is controlled by the current owner from creation', () => {
-  let picServer: PocketIcServer;
-  let pic: PocketIc;
-
-  beforeAll(async () => {
-    picServer = await PocketIcServer.start();
-  });
-
-  afterAll(async () => {
-    await picServer?.stop();
-  });
-
-  beforeEach(async () => {
-    pic = await PocketIc.create(picServer.getUrl(), { application: [{ state: { type: SubnetStateType.New } }] });
-  });
-
-  afterEach(async () => {
-    await pic?.tearDown();
-  });
-
   it('configured set ∪ {ledger, owner}, and the next archive follows a hand-off', async () => {
     const configured = createIdentity(7).getPrincipal();
     const next = createIdentity(8).getPrincipal();

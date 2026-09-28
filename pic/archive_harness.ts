@@ -22,6 +22,11 @@ export const DEFAULT_COLLECTOR = Principal.fromText('q26le-iqaaa-aaaam-actsa-cai
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** `PIC_TRACE=1` prints each harness step with a wall-clock timestamp. */
+export function trace(msg: string): void {
+  if (process.env.PIC_TRACE) console.log(`[trace ${new Date().toISOString()}] ${msg}`);
+}
+
 export const NAMESPACES = {
   icrc1: 'org.icdevs.icrc85.icrc1',
   icrc3: 'org.icdevs.icrc85.icrc3',
@@ -267,8 +272,9 @@ export async function countByStream(collector: Actor<any>): Promise<Record<strin
 }
 
 export async function advanceDays(pic: PocketIc, days: number, ticks = 10): Promise<void> {
+  trace(`advance ${days}d`);
   await pic.advanceTime(days * DAY_MS);
-  for (let i = 0; i < ticks; i++) await pic.tick();
+  for (let i = 0; i < ticks; i++) { trace(`tick ${i}`); await pic.tick(); }
 }
 
 /**
@@ -307,6 +313,7 @@ export async function transferUntil(
     });
     if (!('Ok' in r)) throw new Error(`transfer ${n} failed: ${JSON.stringify(r, (_, v) => typeof v === 'bigint' ? v.toString() : v)}`);
     n++;
+    trace(`transfer ${n} done, ticking`);
     await pic.tick();
     await pic.tick();
   }
