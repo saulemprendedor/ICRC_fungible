@@ -33,6 +33,7 @@ import { Ed25519KeyIdentity } from '@dfinity/identity';
 
 const TOKEN_WASM_PATH = resolve(__dirname, '../.dfx/local/canisters/token/token.wasm.gz');
 const RAW_CALLER_WASM_PATH = resolve(__dirname, '../.dfx/local/canisters/raw_caller/raw_caller.wasm.gz');
+const INTERLEAVE_CALLER_WASM_PATH = resolve(__dirname, '../.dfx/local/canisters/interleave_caller/interleave_caller.wasm.gz');
 
 // =============== IDL Types ===============
 
@@ -117,7 +118,7 @@ class Ledger {
   private constructor(readonly pic: PocketIc, readonly id: Principal) {}
 
   static async create(config: ArchiveConfig): Promise<Ledger> {
-    for (const p of [TOKEN_WASM_PATH, RAW_CALLER_WASM_PATH]) {
+    for (const p of [TOKEN_WASM_PATH, RAW_CALLER_WASM_PATH, INTERLEAVE_CALLER_WASM_PATH]) {
       if (!existsSync(p)) throw new Error(`WASM not found at ${p}. Run pic/build-token-wasm.sh first.`);
     }
     Ledger.server ??= await PocketIcServer.start();
@@ -199,14 +200,14 @@ class Ledger {
       upgradeModeOptions: { wasm_memory_persistence: [{ keep: null }], skip_pre_upgrade: [] },
     });
 
-  async installRawCaller(): Promise<Principal> {
-    const rawId = await this.pic.createCanister({ sender: this.installer });
-    await this.pic.addCycles(rawId, 10_000_000_000_000n);
-    await this.pic.installCode({
-      canisterId: rawId, wasm: readFileSync(RAW_CALLER_WASM_PATH), arg: enc([], []), sender: this.installer,
-    });
-    return rawId;
+  async installCaller(wasmPath: string): Promise<Principal> {
+    const id = await this.pic.createCanister({ sender: this.installer });
+    await this.pic.addCycles(id, 10_000_000_000_000n);
+    await this.pic.installCode({ canisterId: id, wasm: readFileSync(wasmPath), arg: enc([], []), sender: this.installer });
+    return id;
   }
+
+  installRawCaller = () => this.installCaller(RAW_CALLER_WASM_PATH);
 
   /** `method` of the ledger called by `rawId`, an inter-canister call that `inspect` never sees. */
   via = (rawId: Principal, method: string, arg: Uint8Array) =>
@@ -375,5 +376,44 @@ describe('archive administration, archiveControllers = null (unmanaged)', () => 
     for (const r of results) expect(r.result).toEqual({ Err: NOT_CONFIGURED });
     expect(await Promise.all(archives.map((a) => l.controllersOf(a)))).toEqual(before);
     for (const c of before) expect(c).not.toContain(l.installer.toText());
+  });
+});
+
+describe('archive administration: one call writes one owner', () => {
+  let l: Ledger;
+  let archives: Principal[];
+  beforeAll(async () => {
+    l = await Ledger.create({ kind: 'list', list: [Ledger.configured] });
+    archives = await l.growArchives(2);
+  }, 300_000);
+  afterAll(async () => { await l.tearDown(); });
+
+  // The owner is read once, before the first `await`. A hand-off that runs while
+  // the call is suspended must not reach the archives it has not written yet.
+  // The hand-off is enqueued behind the update by a caller canister, so the
+  // ledger runs it at the update's first `await` (between the first
+  // `update_settings` and the second); re-reading `owner` per archive writes the
+  // new owner from the second archive on, which this test catches.
+  it('a hand-off during the call leaves every archive of that call with the owner that sent it', async () => {
+    expect(archives.length).toBeGreaterThanOrEqual(2);
+    const callerId = await l.installCaller(INTERLEAVE_CALLER_WASM_PATH);
+    await l.send('admin_update_owner', enc([IDL.Principal], [callerId]), l.installer);
+
+    const reply = await l.pic.updateCall({
+      canisterId: callerId,
+      method: 'update_then_hand_off',
+      sender: l.installer,
+      arg: IDL.encode([IDL.Principal, IDL.Principal], [l.id, l.newOwner]),
+    });
+    const results = IDL.decode([IDL.Vec(ArchiveControllersResult)], reply)[0] as unknown as Result[];
+
+    expect(sorted(results.map((r) => r.canister_id))).toEqual(sorted(archives));
+    const want = sorted([Ledger.configured, l.id, callerId]);
+    for (const r of results) {
+      expect(sorted((r.result as { Ok: Principal[] }).Ok), r.canister_id.toText()).toEqual(want);
+      expect(await l.controllersOf(r.canister_id), r.canister_id.toText()).toEqual(want);
+    }
+    // The hand-off did land: the new owner now administers, the caller does not.
+    await expect(l.updateArchiveControllers(l.newOwner)).resolves.toHaveLength(archives.length);
   });
 });
