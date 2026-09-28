@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # The library's main before the ICRC-85 switches landed.
-BASELINE_REF="${1:-74eafa9}"
+BASELINE_REF="${1:-5fb6104}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
