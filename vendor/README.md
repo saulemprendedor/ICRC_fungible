@@ -51,6 +51,94 @@ points it at any build.
 **Upstream**: https://github.com/icdevsorg/icrc1.mo — remove this fork once a
 release contains the fix.
 
+## `icrc3-mo` — fork of 0.4.3
+
+Copied unpatched from the registry first (its own commit), so each patch below
+reads as its own diff. No other dependency imports `icrc3-mo`, so there is one
+copy: `mops sources | grep icrc3-mo` must print `vendor/icrc3-mo/src`.
+
+**Upstream**: https://github.com/icdevsorg/icrc3.mo — drop a patch once a
+release contains it, and the fork once none is left.
+
+### Patch: an upgraded archive keeps its bounds
+
+**Where**: `src/archive/lib.mo`, the `args` binding.
+
+The archive keeps the arguments it was created with (`maxRecords`,
+`firstIndex`, …) in the stable `initial_args`, but reads them through
+`transient var args = _args`. A transient variable is re-bound on every
+upgrade, and `src/upgradeArchive.mo` upgrades with placeholders
+(`maxRecords = 0; firstIndex = 0`). After the ledger's `upgradeArchive`:
+
+- `get_stats` and `remaining_capacity` trap with `Natural subtraction
+  underflow` (`args.maxRecords - itemCount`);
+- every archive but the first serves the wrong blocks, or traps, because the
+  lookup subtracts `args.firstIndex`;
+- `append_transactions` reports the archive full (`itemCount >= 0`).
+
+The fix binds `args` to `initial_args`. On a fresh archive the two are the same
+value; on an upgrade `initial_args` keeps the creation-time value. The comment
+in `upgradeArchive.mo` ("args is stable in archive so these init items are a
+noop") states the intent this restores.
+
+**Regression test**: `pic/archive_upgrade_bounds.test.ts`. Red on 0.4.3
+(`get_stats` traps right after the upgrade), green on this fork.
+`TOKEN_WASM=<path>` points it at any build.
+
+### Patch: the archive follows the ledger's ICRC-85 kill switch
+
+**Where**: `src/migrations/v000_002_000/types.mo` (`ArchiveInitArgs`),
+`src/archive/lib.mo`, the two archive creation sites in `src/lib.mo`,
+`src/upgradeArchive.mo`.
+
+Upstream hardcodes the archive's sharing on: its TimerTool gets
+`kill_switch = null` and its `ovs-fixed` gets `advanced = null`, and the ledger
+has no way to change either. A ledger that switches ICRC-85 off still had every
+archive sharing, through two streams (`org.icdevs.icrc85.supertimer` and
+`org.icdevs.icrc85.icrc3archive`).
+
+- `ArchiveInitArgs` gains `icrc85KillSwitch : ?Bool`. Both creation sites pass
+  the ledger's `environment.advanced.icrc85.advanced.kill_switch`, so an archive
+  shares exactly when its ledger's icrc3 stream does. `null` shares, as before:
+  consumers that leave the switch unset (`pic/TokenWithICRC85.mo`) see no change.
+- The archive's `initial_args` is a stable variable. Adding the field to it
+  fails `moc --stable-compatible` (M0170), so `initial_args` keeps its old type,
+  built by projection, and the switch lives in a new stable variable,
+  `icrc85_kill_switch`, which both archive streams read.
+- A new stable variable is initialised, on an upgrade from an archive without
+  it, from the upgrade's arguments. `upgradeArchive` passes placeholders, so
+  `upgradeArchiveWith(canisters, { icrc85KillSwitch })` is added and the ledger
+  passes its switch. `upgradeArchive(canisters)` keeps its signature and passes
+  `null`. Once an archive has the variable, later upgrades keep its value.
+
+**Tests**: `pic/icrc85_off.test.ts` ("new archives send nothing",
+"an archive created by the baseline pays until upgradeArchive, then stops").
+
+### Patch: extra controllers for each new archive
+
+**Where**: `src/migrations/v000_002_000/types.mo` (`Environment.advanced`),
+`src/lib.mo` (`update_controllers` and the second creation site).
+
+The ledger decides who controls a new archive through `archiveControllers`,
+but it cannot add a principal only it knows at creation time, such as a mutable
+owner. The environment's `advanced` gains
+`get_archive_controllers : ?(() -> [Principal])`, read when each archive is
+created. When `archiveControllers` is managed (`?list` or `?null`), its result
+joins the set; when it is `null` (unmanaged), nothing is written, as before.
+Every consumer's environment literal adds `get_archive_controllers = null`.
+
+Upstream also applied the controller set to the **first** archive only: the
+branch that creates the next archive when the last one is full never called
+`update_controllers`. That call is added, so every new archive gets the set.
+**Behaviour change** for any consumer with a managed `archiveControllers`:
+its second and later archives now get the configured controllers too, where
+upstream left them controlled by the ledger alone.
+
+The call stays fire-and-forget, as upstream has it.
+
+**Tests**: `pic/icrc85_off.test.ts` ("a new archive is controlled by the current
+owner from creation").
+
 ## `mops.lock` caveat (mops CLI 2.13.1)
 
 When mops first resolves a local-path dependency it writes an **absolute** path

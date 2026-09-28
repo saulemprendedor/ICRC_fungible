@@ -99,7 +99,16 @@ See `/test/integration/` for index-ng canister integration tests that verify blo
 
 ## ICRC-85 Open Value Sharing (OVS) Roll-Up
 
-This token deploys multiple components that each participate in [ICRC-85 Open Value Sharing](https://github.com/dfinity/ICRC/issues/85) via the [ovs-fixed](https://mops.one/ovs-fixed) library. Each component independently shares a portion of cycles with infrastructure providers based on its usage. Below is the complete roll-up of OVS namespaces active in a deployed token canister and its archives.
+> **`src/Token.mo` ships with every stream below switched OFF.** The ledger and
+> its archives send no cycles for ICRC-85. Each stream is stopped through the
+> field its library reads (see the comments in `src/Token.mo`): the icrc1
+> environment's `icrc85.advanced.kill_switch` (its top-level `kill_switch` is
+> read by nothing), the icrc3 environment's `icrc85.advanced.kill_switch`
+> (which each new archive also takes), and the TimerTool environment's
+> `advanced.icrc85.kill_switch`. `pic/icrc85_off.test.ts` pins it, and
+> `pic/TokenWithICRC85.mo` shows a token with sharing on.
+
+This token deploys multiple components that each can participate in [ICRC-85 Open Value Sharing](https://github.com/dfinity/ICRC/issues/85) via the [ovs-fixed](https://mops.one/ovs-fixed) library. Each component independently shares a portion of cycles with infrastructure providers based on its usage. Below is the complete roll-up of OVS namespaces a token canister and its archives run when sharing is on.
 
 ### Ledger Canister
 

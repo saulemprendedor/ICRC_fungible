@@ -163,6 +163,7 @@ shared ({ caller = _owner }) persistent actor class Token (args: ?{
                true // Placeholder simple implementation or wire up CertTree if needed
             });
             icrc85 = null;
+            get_archive_controllers = null;
           };
           get_certificate_store = null; // ?get_certificate_store;
           var org_icdevs_timer_tool = null;
