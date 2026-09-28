@@ -2,6 +2,11 @@ import type { Principal } from '@dfinity/principal';
 import type { ActorMethod } from '@dfinity/agent';
 import type { IDL } from '@dfinity/candid';
 
+export interface ArchiveControllersResult {
+  'result' : { 'Ok' : Array<Principal> } |
+    { 'Err' : string },
+  'canister_id' : Principal,
+}
 export interface Account {
   'owner' : Principal,
   'subaccount' : [] | [Subaccount],
@@ -316,7 +321,10 @@ export interface Token {
   >,
   'mint' : ActorMethod<[Mint], TransferResult>,
   'set_icrc106_index_principal' : ActorMethod<[[] | [Principal]], undefined>,
-  'update_archive_controllers' : ActorMethod<[], undefined>,
+  'update_archive_controllers' : ActorMethod<
+    [],
+    Array<ArchiveControllersResult>
+  >,
   'upgradeArchive' : ActorMethod<[boolean], undefined>,
 }
 export interface Transaction {

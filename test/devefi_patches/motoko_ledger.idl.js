@@ -450,6 +450,10 @@ export const idlFactory = ({ IDL }) => {
     'Err' : TransferBatchError,
   });
   const TransferBatchResults = IDL.Vec(IDL.Opt(TransferBatchResult));
+  const ArchiveControllersResult = IDL.Record({
+    'result' : IDL.Variant({ 'Ok' : IDL.Vec(IDL.Principal), 'Err' : IDL.Text }),
+    'canister_id' : IDL.Principal,
+  });
   const Token = IDL.Service({
     'admin_init' : IDL.Func([], [], []),
     'admin_update_icrc1' : IDL.Func(
@@ -566,7 +570,11 @@ export const idlFactory = ({ IDL }) => {
       ),
     'mint' : IDL.Func([Mint], [TransferResult], []),
     'set_icrc106_index_principal' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
-    'update_archive_controllers' : IDL.Func([], [], []),
+    'update_archive_controllers' : IDL.Func(
+        [],
+        [IDL.Vec(ArchiveControllersResult)],
+        [],
+      ),
     'upgradeArchive' : IDL.Func([IDL.Bool], [], []),
   });
   return Token;

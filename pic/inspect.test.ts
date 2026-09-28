@@ -10,7 +10,8 @@
  *     ledger-info update (a logo). A batch may weigh what its entries account
  *     for, and a consent request is held to the rules of the call it wraps.
  *  2. A method whose body admits one principal is refused at ingress for anyone
- *     else. The owner is the CURRENT owner, not whoever installed the canister.
+ *     else. The owner is the CURRENT owner, not whoever installed the canister,
+ *     and that includes the archive methods: upgrading the canister grants none.
  *  3. Reads sent as update calls stay open to every caller, the anonymous
  *     principal included: wallets read balances through certified updates.
  *
@@ -458,6 +459,10 @@ class Ledger {
       ['admin_set_index_canister', enc([IDL.Opt(IDL.Principal)], [[]])],
       ['set_icrc106_index_principal', enc([IDL.Opt(IDL.Principal)], [[]])],
       ['icrc107_set_fee_collector', enc([SetFeeCollectorArgs], [{ fee_collector: [], created_at_time: 1n }])],
+      // The archive methods follow the owner too. With no archive they change nothing.
+      ['upgradeArchive', enc([IDL.Bool], [true])],
+      ['update_archive_controllers', enc([], [])],
+      ['getUpgradeError', enc([], [])], // a read, refused at ingress to all but the owner
       ['admin_update_owner', enc([IDL.Principal], [nextOwner])], // last: it hands the ledger to `nextOwner`
     ];
   }
@@ -788,7 +793,7 @@ describe('inspect: caller class', () => {
     expect(IDL.decode([IDL.Text], await l.query('icrc1_name', enc([], [])))[0]).toBe('Renamed');
   });
 
-  it('the installer-gated methods mirror their bodies', async () => {
+  it('a controller that is not the owner gets no archive method, but may run admin_init', async () => {
     const none = enc([], []);
     const override = enc([IDL.Bool], [false]);
     const spent = await l.spent(async () => {
@@ -807,13 +812,19 @@ describe('inspect: caller class', () => {
     await expect(l.send('update_archive_controllers', none, l.installer)).resolves.toBeDefined();
     await expect(l.send('getUpgradeError', none, l.installer)).resolves.toBeDefined();
 
-    // The installer keeps these after a hand-off, because the bodies say so.
+    // The archive methods go with the hand-off; admin_init follows the owner as well.
     await l.send('admin_update_owner', enc([IDL.Principal], [l.newOwner]), l.installer);
-    await expect(l.send('update_archive_controllers', none, l.installer)).resolves.toBeDefined();
-    await expect(l.send('update_archive_controllers', none, l.newOwner)).rejects.toThrow(REFUSED);
+    for (const method of ['update_archive_controllers', 'getUpgradeError']) {
+      await expect(l.send(method, none, l.installer), `${method} from the installer`).rejects.toThrow(REFUSED);
+      await expect(l.send(method, none, l.newOwner), `${method} from the new owner`).resolves.toBeDefined();
+    }
+    await expect(l.send('upgradeArchive', override, l.installer)).rejects.toThrow(REFUSED);
+    await expect(l.send('upgradeArchive', override, l.newOwner)).resolves.toBeDefined();
+    await expect(l.send('admin_init', none, l.newOwner)).resolves.toBeDefined(); // not a controller
+    await expect(l.send('admin_init', none, l.stranger)).rejects.toThrow(REFUSED);
   });
 
-  it('whoever upgrades the canister takes the installer-gated methods', async () => {
+  it('upgrading the canister grants no archive method', async () => {
     const none = enc([], []);
     await expect(l.send('update_archive_controllers', none, l.installer)).resolves.toBeDefined();
     await expect(l.send('update_archive_controllers', none, l.controller)).rejects.toThrow(REFUSED);
@@ -821,10 +832,12 @@ describe('inspect: caller class', () => {
     await l.upgradeAs(l.controller);
     await l.pic.tick(3);
 
-    await expect(l.send('update_archive_controllers', none, l.controller)).resolves.toBeDefined();
-    await expect(l.send('getUpgradeError', none, l.controller)).resolves.toBeDefined();
-    await expect(l.send('update_archive_controllers', none, l.installer)).rejects.toThrow(REFUSED);
-    await expect(l.send('getUpgradeError', none, l.installer)).rejects.toThrow(REFUSED);
+    // `_owner` is now the controller; the archive methods do not follow it.
+    for (const method of ['update_archive_controllers', 'getUpgradeError']) {
+      await expect(l.send(method, none, l.controller), `${method} from the upgrader`).rejects.toThrow(REFUSED);
+      await expect(l.send(method, none, l.installer), `${method} from the owner`).resolves.toBeDefined();
+    }
+    await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.controller)).rejects.toThrow(REFUSED);
     // The owner did not move with the upgrade.
     await expect(l.send('admin_update_icrc2', enc([IDL.Vec(Icrc2InfoRequest)], [[]]), l.installer)).resolves.toBeDefined();
     await expect(l.send('admin_update_icrc2', enc([IDL.Vec(Icrc2InfoRequest)], [[]]), l.controller)).rejects.toThrow(REFUSED);
