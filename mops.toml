@@ -5,7 +5,10 @@ core = "2.1.0"
 # transfer once a batch of dedup entries expires at the same time.
 icrc1-mo = "./vendor/icrc1-mo"
 icrc2-mo = "0.2.1"
-icrc3-mo = "0.4.3"
+# LOCAL FORK of icrc3-mo 0.4.3 — see vendor/README.md. The archive's ICRC-85
+# sharing follows the ledger's kill switch, the ledger can add controllers to a
+# new archive, and an upgraded archive keeps its own bounds.
+icrc3-mo = "./vendor/icrc3-mo"
 icrc4-mo = "0.2.1"
 ic-certification = "1.1.0"
 class-plus = "0.2.1"
