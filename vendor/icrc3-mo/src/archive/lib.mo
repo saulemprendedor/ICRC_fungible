@@ -102,7 +102,13 @@ shared ({ caller = ledger_canister_id }) persistent actor class Archive (_args :
     public type ArchiveStats = T.Current.ArchiveStats;
 
     var initial_args = _args;
-    transient var args = _args;
+    // LOCAL PATCH (upgrade keeps bounds): read the arguments the archive was
+    // created with, which `initial_args` keeps across upgrades. Upstream binds
+    // `args` to `_args`, and `upgradeArchive` upgrades with placeholders
+    // (`maxRecords = 0; firstIndex = 0`), so after an upgrade `get_stats` and
+    // `remaining_capacity` trapped, every archive past block 0 served the wrong
+    // blocks, and the archive refused all appends as full.
+    transient var args = initial_args;
 
     var memstore = SW.init({
       //maxRecords = args.maxRecords;

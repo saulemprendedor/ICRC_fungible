@@ -51,6 +51,40 @@ points it at any build.
 **Upstream**: https://github.com/icdevsorg/icrc1.mo — remove this fork once a
 release contains the fix.
 
+## `icrc3-mo` — fork of 0.4.3
+
+Copied unpatched from the registry first (its own commit), so each patch below
+reads as its own diff. No other dependency imports `icrc3-mo`, so there is one
+copy: `mops sources | grep icrc3-mo` must print `vendor/icrc3-mo/src`.
+
+**Upstream**: https://github.com/icdevsorg/icrc3.mo — drop a patch once a
+release contains it, and the fork once none is left.
+
+### Patch: an upgraded archive keeps its bounds
+
+**Where**: `src/archive/lib.mo`, the `args` binding.
+
+The archive keeps the arguments it was created with (`maxRecords`,
+`firstIndex`, …) in the stable `initial_args`, but reads them through
+`transient var args = _args`. A transient variable is re-bound on every
+upgrade, and `src/upgradeArchive.mo` upgrades with placeholders
+(`maxRecords = 0; firstIndex = 0`). After the ledger's `upgradeArchive`:
+
+- `get_stats` and `remaining_capacity` trap with `Natural subtraction
+  underflow` (`args.maxRecords - itemCount`);
+- every archive but the first serves the wrong blocks, or traps, because the
+  lookup subtracts `args.firstIndex`;
+- `append_transactions` reports the archive full (`itemCount >= 0`).
+
+The fix binds `args` to `initial_args`. On a fresh archive the two are the same
+value; on an upgrade `initial_args` keeps the creation-time value. The comment
+in `upgradeArchive.mo` ("args is stable in archive so these init items are a
+noop") states the intent this restores.
+
+**Regression test**: `pic/archive_upgrade_bounds.test.ts`. Red on 0.4.3
+(`get_stats` traps right after the upgrade), green on this fork.
+`TOKEN_WASM=<path>` points it at any build.
+
 ## `mops.lock` caveat (mops CLI 2.13.1)
 
 When mops first resolves a local-path dependency it writes an **absolute** path
