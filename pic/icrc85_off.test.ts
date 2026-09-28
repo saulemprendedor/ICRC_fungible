@@ -1,0 +1,220 @@
+/**
+ * `src/Token.mo` ships with ICRC-85 Open Value Sharing OFF: neither the ledger
+ * nor any of its archives sends cycles, through any stream, from install onward
+ * and after an upgrade from a build that did share.
+ *
+ * The production `src/Token.mo` is tested UNCHANGED. The collector is created
+ * at the library's default collector id (`archive_harness.DEFAULT_COLLECTOR`),
+ * which is where an unconfigured ledger sends its shares. A balance check with
+ * the default collector absent would prove nothing: a send to a missing
+ * canister is refunded. So every "nothing was sent" below is paired with a
+ * positive control in the same harness that sees a paying ledger.
+ *
+ * Streams and the namespace each one reports to the collector:
+ *   ledger   icrc1 `org.icdevs.icrc85.icrc1`, icrc3 `org.icdevs.icrc85.icrc3`,
+ *            TimerTool `org.icdevs.icrc85.supertimer`
+ *   archive  TimerTool `org.icdevs.icrc85.supertimer`, ovs-fixed
+ *            `org.icdevs.icrc85.icrc3archive` (told apart by the caller)
+ *
+ * Wasms: `bash pic/build-token-wasm.sh` (current) and
+ * `bash pic/build-baseline-wasm.sh` (the library before the switch-off).
+ * TOKEN_WASM / BASELINE_TOKEN_WASM point at other builds.
+ *
+ * Also here: a new archive gets the ledger's current owner as a controller
+ * when it is created.
+ */
+
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { PocketIc, PocketIcServer, SubnetStateType } from '@dfinity/pic';
+import { Principal } from '@icp-sdk/core/principal';
+import {
+  NAMESPACES, advanceDays, countByStream, archiveBlocks, archiveIdl, archives, countByNamespace, createIdentity,
+  installCollector, installLedger, smallArchiveArgs, transferUntil, upgradeLedger, wasmPath,
+} from './archive_harness';
+
+const TOKEN_WASM = wasmPath('TOKEN_WASM', 'token');
+const BASELINE_WASM = wasmPath('BASELINE_TOKEN_WASM', 'token_baseline');
+
+const LEDGER_STREAMS = [NAMESPACES.icrc1, NAMESPACES.icrc3, NAMESPACES.timerTool];
+const ARCHIVE_STREAMS = [NAMESPACES.timerTool, NAMESPACES.archive];
+
+const owner = createIdentity(1).getPrincipal();
+const holder = createIdentity(2);
+
+const sorted = (ps: Principal[]) => ps.map((p) => p.toText()).sort();
+
+/** Asserts `after` has no more notifications than `before`, per namespace, naming the stream. */
+function expectNoGrowth(before: Record<string, number>, after: Record<string, number>, what: string) {
+  for (const ns of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    expect(after[ns] ?? 0, `${what}: stream ${ns} sent cycles`).toBe(before[ns] ?? 0);
+  }
+}
+
+describe('ICRC-85 is off', () => {
+  let picServer: PocketIcServer;
+  let pic: PocketIc;
+
+  beforeAll(async () => {
+    picServer = await PocketIcServer.start();
+  });
+
+  afterAll(async () => {
+    await picServer?.stop();
+  });
+
+  beforeEach(async () => {
+    pic = await PocketIc.create(picServer.getUrl(), { application: [{ state: { type: SubnetStateType.New } }] });
+  });
+
+  afterEach(async () => {
+    await pic?.tearDown();
+  });
+
+  it('positive control: the baseline ledger pays the default collector on every ledger stream', async () => {
+    const collector = await installCollector(pic);
+    const { id } = await installLedger(pic, BASELINE_WASM, owner, null);
+    await advanceDays(pic, 8);
+    const counts = await countByNamespace(collector, id);
+    for (const ns of LEDGER_STREAMS) {
+      expect(counts[ns] ?? 0, `baseline stream ${ns} should pay`).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('a fresh ledger sends nothing, on any stream', async () => {
+    const collector = await installCollector(pic);
+    await installLedger(pic, TOKEN_WASM, owner, null);
+    for (const days of [8, 31, 31]) {
+      await advanceDays(pic, days);
+      expectNoGrowth({}, await countByStream(collector), `fresh ledger, +${days}d`);
+    }
+  });
+
+  it('a share queued by the baseline sends nothing after the upgrade', async () => {
+    const collector = await installCollector(pic);
+    const { id } = await installLedger(pic, BASELINE_WASM, owner, null);
+    await advanceDays(pic, 8);
+    const before = await countByNamespace(collector, id);
+    for (const ns of LEDGER_STREAMS) {
+      expect(before[ns] ?? 0, `baseline stream ${ns} paid before the upgrade`).toBeGreaterThanOrEqual(1);
+    }
+
+    await upgradeLedger(pic, id, TOKEN_WASM, owner, null);
+    const streamsBefore = await countByStream(collector);
+    for (const days of [31, 31]) {
+      await advanceDays(pic, days);
+      expectNoGrowth(streamsBefore, await countByStream(collector), `after the upgrade, +${days}d`);
+    }
+  });
+
+  it('new archives send nothing, the first and the next', async () => {
+    const collector = await installCollector(pic);
+    const { id, actor: ledger } = await installLedger(pic, TOKEN_WASM, owner, smallArchiveArgs({ perArchive: 60 }));
+    await transferUntil(pic, ledger, owner, holder, async () => (await archives(ledger, id)).length >= 2);
+    const list = await archives(ledger, id);
+
+    for (const days of [8, 31, 31]) {
+      await advanceDays(pic, days);
+      expectNoGrowth({}, await countByStream(collector), `ledger with ${list.length} archives, +${days}d`);
+    }
+  });
+
+  it('an archive created by the baseline pays until upgradeArchive, then stops and keeps its blocks', async () => {
+    const collector = await installCollector(pic);
+    const { id, actor: ledger } = await installLedger(pic, BASELINE_WASM, owner, smallArchiveArgs({ perArchive: 60 }));
+    await transferUntil(pic, ledger, owner, holder, async () => (await archives(ledger, id)).length >= 2);
+    const list = await archives(ledger, id);
+
+    // Positive control for the archive streams.
+    await advanceDays(pic, 8);
+    for (const a of list) {
+      const counts = await countByNamespace(collector, a.canister_id);
+      for (const ns of ARCHIVE_STREAMS) {
+        expect(counts[ns] ?? 0, `baseline archive ${a.canister_id.toText()} stream ${ns} should pay`).toBeGreaterThanOrEqual(1);
+      }
+    }
+
+    const blocksBefore: string[] = [];
+    for (const a of list) {
+      const archive = pic.createActor<any>(archiveIdl, a.canister_id);
+      const stats = await archive.get_stats();
+      blocksBefore.push(await archiveBlocks(archive, stats.first_block_index, stats.total_records));
+    }
+
+    await upgradeLedger(pic, id, TOKEN_WASM, owner, smallArchiveArgs({ perArchive: 60 }));
+    ledger.setPrincipal(owner);
+    await ledger.upgradeArchive(false);
+    for (let i = 0; i < 5; i++) await pic.tick();
+    expect(await ledger.getUpgradeError()).toBe('');
+
+    const before = await countByStream(collector);
+    for (const days of [31, 31]) {
+      await advanceDays(pic, days);
+      expectNoGrowth(before, await countByStream(collector), `after upgradeArchive, +${days}d`);
+    }
+
+    for (const [i, a] of list.entries()) {
+      const archive = pic.createActor<any>(archiveIdl, a.canister_id);
+      const stats = await archive.get_stats();
+      expect(await archiveBlocks(archive, stats.first_block_index, stats.total_records), `blocks of ${a.canister_id.toText()}`)
+        .toBe(blocksBefore[i]);
+    }
+  });
+});
+
+describe('a new archive is controlled by the current owner from creation', () => {
+  let picServer: PocketIcServer;
+  let pic: PocketIc;
+
+  beforeAll(async () => {
+    picServer = await PocketIcServer.start();
+  });
+
+  afterAll(async () => {
+    await picServer?.stop();
+  });
+
+  beforeEach(async () => {
+    pic = await PocketIc.create(picServer.getUrl(), { application: [{ state: { type: SubnetStateType.New } }] });
+  });
+
+  afterEach(async () => {
+    await pic?.tearDown();
+  });
+
+  it('configured set ∪ {ledger, owner}, and the next archive follows a hand-off', async () => {
+    const configured = createIdentity(7).getPrincipal();
+    const next = createIdentity(8).getPrincipal();
+    const { id, actor: ledger } = await installLedger(
+      pic, TOKEN_WASM, owner, smallArchiveArgs({ perArchive: 60, controllers: [configured] }),
+    );
+
+    await transferUntil(pic, ledger, owner, holder, async () => (await archives(ledger, id)).length >= 1);
+    for (let i = 0; i < 5; i++) await pic.tick();
+    const [first] = await archives(ledger, id);
+    expect(sorted(await pic.getControllers(first.canister_id)), 'first archive')
+      .toEqual(sorted([configured, id, owner]));
+
+    ledger.setPrincipal(owner);
+    expect(await ledger.admin_update_owner(next)).toBe(true);
+
+    // No mint after the hand-off: `mint` needs the current owner AND the
+    // minting account, which stays the installer. The holder has enough.
+    await transferUntil(pic, ledger, next, holder, async () => (await archives(ledger, id)).length >= 2, 600, false);
+    for (let i = 0; i < 5; i++) await pic.tick();
+    const second = (await archives(ledger, id)).find((a) => a.canister_id.toText() !== first.canister_id.toText())!;
+    expect(sorted(await pic.getControllers(second.canister_id)), 'archive created after the hand-off')
+      .toEqual(sorted([configured, id, next]));
+    expect(sorted(await pic.getControllers(first.canister_id)), 'first archive, unchanged by the hand-off')
+      .toEqual(sorted([configured, id, owner]));
+  });
+
+  it('`archiveControllers = null` is unmanaged: only the ledger controls a new archive', async () => {
+    const { id, actor: ledger } = await installLedger(
+      pic, TOKEN_WASM, owner, smallArchiveArgs({ perArchive: 60, controllers: 'unmanaged' }),
+    );
+    await transferUntil(pic, ledger, owner, holder, async () => (await archives(ledger, id)).length >= 1);
+    for (let i = 0; i < 5; i++) await pic.tick();
+    const [first] = await archives(ledger, id);
+    expect(sorted(await pic.getControllers(first.canister_id))).toEqual(sorted([id]));
+  });
+});

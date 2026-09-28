@@ -167,7 +167,7 @@ export function tokenInitType() {
 export type ArchiveControllers = 'unmanaged' | 'default' | Principal[];
 
 /** Small bounds: ~50 records on the ledger, up to `perArchive` per archive. */
-export function smallArchiveArgs(opts: { perArchive?: number; controllers?: ArchiveControllers } = {}) {
+export function smallArchiveArgs(opts: { perArchive?: number; controllers?: ArchiveControllers; archiveCycles?: bigint } = {}) {
   const c = opts.controllers ?? 'unmanaged';
   const archiveControllers = c === 'unmanaged' ? [] : c === 'default' ? [[]] : [[c]];
   return [{
@@ -180,7 +180,9 @@ export function smallArchiveArgs(opts: { perArchive?: number; controllers?: Arch
       maxArchivePages: 62500n,
       archiveIndexType: { Stable: null },
       maxRecordsToArchive: 25n,
-      archiveCycles: 2_000_000_000_000n,
+      // `Token.mo`'s default. An archive with little more than an upgrade's
+      // cost cannot be upgraded once it has paid a couple of ICRC-85 shares.
+      archiveCycles: opts.archiveCycles ?? 20_000_000_000_000n,
       archiveControllers,
       supportedBlocks: [],
     }],
@@ -254,6 +256,16 @@ export async function countByNamespace(collector: Actor<any>, from?: Principal):
 
 const RECIPIENT = createIdentity(99).getPrincipal();
 
+/** Notification count per `namespace @ caller`, so a failure names the paying canister. */
+export async function countByStream(collector: Actor<any>): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const n of await notifications(collector)) {
+    const k = `${n.namespace} @ ${n.caller.toText()}`;
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
 export async function advanceDays(pic: PocketIc, days: number, ticks = 10): Promise<void> {
   await pic.advanceTime(days * DAY_MS);
   for (let i = 0; i < ticks; i++) await pic.tick();
@@ -270,9 +282,10 @@ export async function transferUntil(
   holder: Ed25519KeyIdentity,
   done: () => Promise<boolean>,
   max = 600,
+  mint = true,
 ): Promise<number> {
   ledger.setPrincipal(owner);
-  const minted = await ledger.mint({
+  const minted = !mint ? { Ok: 0n } : await ledger.mint({
     to: { owner: holder.getPrincipal(), subaccount: [] },
     amount: 1_000_000_000_000n,
     memo: [],
