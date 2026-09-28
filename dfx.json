@@ -32,6 +32,12 @@
           "gzip": true,
           "args": "-v --incremental-gc"
         },
+        "interleave_caller": {
+          "type": "motoko",
+          "main": "pic/InterleaveCaller.mo",
+          "gzip": true,
+          "args": "-v --incremental-gc"
+        },
         "prodtoken": {
           "type": "motoko",
           "gzip": true,

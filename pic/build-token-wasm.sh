@@ -22,6 +22,7 @@ ALL=(
   "token_icrc85:pic/TokenWithICRC85.mo"
   "dummy_collector:pic/DummyCollector.mo"
   "raw_caller:pic/RawCaller.mo"
+  "interleave_caller:pic/InterleaveCaller.mo"
 )
 
 MOC="$(mops toolchain bin moc)"

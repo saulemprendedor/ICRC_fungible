@@ -841,18 +841,15 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         #admin_update_icrc1 _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
         or #admin_update_owner _ or #admin_set_index_canister _
         or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
+        // The archive methods follow the owner too, so their power goes with
+        // `admin_update_owner` and upgrading the canister grants nothing.
+        // `getUpgradeError` is a read, but its body answers the owner alone
+        // and no wallet asks for it, so it is not part of the open reads.
+        or #upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _
       ) caller == owner;
 
-      // ---- `_owner` only, as the bodies have it: the principal that performed
-      // the last install or upgrade, re-bound on every upgrade ----
-      // `getUpgradeError` is a read, but its body answers that principal alone
-      // and no wallet asks for it, so it is not part of the open reads.
-      case (#upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _) {
-        caller == _owner;
-      };
-
-      // ---- `_owner` or a controller, as the body has it ----
-      case (#admin_init _) caller == _owner or Principal.isController(caller);
+      // ---- The owner or a controller, as the body has it ----
+      case (#admin_init _) caller == owner or Principal.isController(caller);
 
       // ---- Open to every caller: reads without an argument worth checking,
       // and `deposit_cycles`, which anybody may use to fund the canister ----
@@ -939,13 +936,16 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   var upgradeError = "";
   var upgradeComplete = false;
 
+  // The archive methods are gated on the mutable `owner`, never on `_owner`:
+  // `_owner` is whoever performed the last install or upgrade, so gating on it
+  // would hand the archives to anyone who upgrades the canister.
   public query ({caller}) func getUpgradeError() : async Text {
-    if(caller != _owner){ Runtime.trap("Unauthorized")};
+    if(caller != owner){ Runtime.trap("Unauthorized")};
     return upgradeError;
   };
 
   public shared ({ caller }) func upgradeArchive(bOverride : Bool) : async () {
-    if(caller != _owner){ Runtime.trap("Unauthorized")};
+    if(caller != owner){ Runtime.trap("Unauthorized")};
     if(bOverride == true or upgradeComplete == false){} else {
       Runtime.trap("Upgrade already complete");
     };
@@ -961,35 +961,62 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
 
   
 
-  public shared({caller}) func update_archive_controllers() : async () {
-    if(_owner != caller){ Runtime.trap("Unauthorized")};
-    
-      for (archive in Map.keys(icrc3().get_state().archives)){
-        switch(icrc3().get_state().constants.archiveProperties.archiveControllers){
-          case(?val){
-            let final_list = switch(val){
-              case(?list){
-                let a_set = Set.fromIter<Principal>(list.vals(), Principal.compare);
-                Set.add(a_set, Principal.compare, Principal.fromActor(this));
-                Set.add(a_set, Principal.compare, _owner);
-                ?Iter.toArray(Set.values(a_set));
-              };
-              case(null){
-                ?[Principal.fromActor(this), _owner];
-              };
-            };
-            let ic : ICRC3.IC = actor("aaaaa-aa");
-            ignore ic.update_settings(({canister_id = archive; settings = {
-                      controllers = final_list;
+  public type ArchiveControllersResult = {
+    canister_id : Principal;
+    result : { #Ok : [Principal]; #Err : Text };
+  };
+
+  /// Sets the controllers of every ICRC-3 archive to the configured
+  /// `archiveControllers` plus this ledger and the current `owner`. The list
+  /// REPLACES the archive's controllers, so a former owner is dropped. With
+  /// `archiveControllers = null` the archives are unmanaged: nothing is sent
+  /// and every archive reports it. One result per archive, in the order of the
+  /// snapshot taken before the first `await`.
+  public shared({caller}) func update_archive_controllers() : async [ArchiveControllersResult] {
+    if(caller != owner){ Runtime.trap("Unauthorized")};
+
+    // Read once, before any `await`: every archive of this call gets the same
+    // set even if `admin_update_owner` interleaves, and an archive created
+    // mid-loop is left to the next call.
+    let current_owner = owner;
+    let archives = Iter.toArray<Principal>(Map.keys(icrc3().get_state().archives));
+
+    let final_list : ?[Principal] = switch(icrc3().get_state().constants.archiveProperties.archiveControllers){
+      case(null) null;
+      case(?val){
+        let a_set = switch(val){
+          case(?list) Set.fromIter<Principal>(list.vals(), Principal.compare);
+          case(null) Set.empty<Principal>();
+        };
+        Set.add(a_set, Principal.compare, Principal.fromActor(this));
+        Set.add(a_set, Principal.compare, current_owner);
+        ?Iter.toArray(Set.values(a_set));
+      };
+    };
+
+    let results = List.empty<ArchiveControllersResult>();
+    let ic : ICRC3.IC = actor("aaaaa-aa");
+    for (archive in archives.vals()){
+      switch(final_list){
+        case(null){
+          List.add(results, { canister_id = archive; result = #Err("archive controllers are not configured") });
+        };
+        case(?controllers){
+          try {
+            await ic.update_settings(({canister_id = archive; settings = {
+                      controllers = ?controllers;
                       freezing_threshold = null;
                       memory_allocation = null;
                       compute_allocation = null;
             }}));
+            List.add(results, { canister_id = archive; result = #Ok(controllers) });
+          } catch(e){
+            List.add(results, { canister_id = archive; result = #Err(Error.message(e)) });
           };
-          case(_){};    
         };
       };
-
+    };
+    List.toArray(results);
   };
   
 
@@ -1290,9 +1317,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   private var _init = false;
   public shared(msg) func admin_init() : async () {
     //can only be called once
-    if(msg.caller != _owner){
-      //check controllers
-       if(not Principal.isController(msg.caller)) Runtime.trap("unauthorized");
+    if(msg.caller != owner and not Principal.isController(msg.caller)){
+      Runtime.trap("unauthorized");
     };
 
     if(_init == false){
