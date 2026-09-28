@@ -25,6 +25,14 @@ module {
    /// let results = await upgradeArchive(principals);
    /// ```
    public func upgradeArchive<system>(canisters: [Principal]) : async [Result.Result<(),Text>]{
+    await upgradeArchiveWith<system>(canisters, { icrc85KillSwitch = null });
+   };
+
+   /// LOCAL PATCH (archive kill switch): `upgradeArchive` with the ledger's
+   /// icrc3 ICRC-85 kill switch. An archive created before the switch existed
+   /// takes it from this upgrade; an archive that already has it keeps its own.
+   /// Pass the same value the ledger's icrc3 environment has.
+   public func upgradeArchiveWith<system>(canisters: [Principal], options : { icrc85KillSwitch : ?Bool }) : async [Result.Result<(),Text>]{
 
     let result = List.empty<Result.Result<(),Text>>();
     label proc for(thisCanister in canisters.vals()){
@@ -37,6 +45,7 @@ module {
           indexType = #Stable;
           firstIndex = 0;
           icrc85Collector = null;
+          icrc85KillSwitch = options.icrc85KillSwitch;
         });
         List.add(result, #ok(()));
       }catch(e){

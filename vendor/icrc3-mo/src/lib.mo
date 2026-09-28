@@ -563,14 +563,24 @@ module {
     private func update_controllers(canisterId : Principal) : async (){
       switch(state.constants.archiveProperties.archiveControllers){
         case(?val){
+          // LOCAL PATCH (controllers at archive creation): add the environment's
+          // `get_archive_controllers`, read now, to the set. Without the hook the
+          // set is the upstream one.
+          let extra : [Principal] = switch(do?{environment.advanced!.get_archive_controllers!}){
+            case(?get) get();
+            case(null) [];
+          };
           let final_list = switch(val){
             case(?list){
               let a_set = Set.fromIter<Principal>(list.vals(), Principal.compare);
               Set.add(a_set, Principal.compare, canister);
+              for(p in extra.vals()) Set.add(a_set, Principal.compare, p);
               ?Set.toArray(a_set);
             };
             case(null){
-              ?[canister];
+              let a_set = Set.fromIter<Principal>(extra.vals(), Principal.compare);
+              Set.add(a_set, Principal.compare, canister);
+              ?Set.toArray(a_set);
             };
           };
           ignore ic.update_settings(({canister_id = canisterId; settings = {
@@ -685,6 +695,7 @@ module {
           maxPages = state.constants.archiveProperties.maxArchivePages;
           firstIndex = 0;
           icrc85Collector = do?{environment.advanced!.icrc85!.collector!};
+          icrc85KillSwitch = do?{environment.advanced!.icrc85!.advanced!.kill_switch!}; // LOCAL PATCH (archive kill switch)
         });
         //set archive controllers calls async
         ignore update_controllers(Principal.fromActor(newArchive));
@@ -724,7 +735,12 @@ module {
             maxPages = state.constants.archiveProperties.maxArchivePages;
             firstIndex = lastArchive.1.start + lastArchive.1.length;
             icrc85Collector = do?{environment.advanced!.icrc85!.collector!};
+            icrc85KillSwitch = do?{environment.advanced!.icrc85!.advanced!.kill_switch!}; // LOCAL PATCH (archive kill switch)
           });
+
+          // LOCAL PATCH (controllers at archive creation): upstream sets the
+          // controllers of the first archive only.
+          ignore update_controllers(Principal.fromActor(newArchive));
 
           debug if(debug_channel.clean_up) Debug.print("Have a multi archive");
           let newItem = {

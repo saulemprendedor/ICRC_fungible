@@ -101,7 +101,26 @@ shared ({ caller = ledger_canister_id }) persistent actor class Archive (_args :
     public type TransactionRange = T.Current.TransactionRange;
     public type ArchiveStats = T.Current.ArchiveStats;
 
-    var initial_args = _args;
+    // LOCAL PATCH (archive kill switch): `initial_args` is stable, so it keeps
+    // the type it had before `icrc85KillSwitch` was added to the arguments
+    // (adding the field to it fails `moc --stable-compatible`, M0170). The
+    // switch lives in its own stable variable instead. On an upgrade from an
+    // archive without it, that variable is initialised from the upgrade's
+    // arguments; later upgrades keep it.
+    var initial_args : {
+      maxRecords : Nat;
+      maxPages : Nat;
+      indexType : SW.IndexType;
+      firstIndex : Nat;
+      icrc85Collector : ?Principal;
+    } = {
+      maxRecords = _args.maxRecords;
+      maxPages = _args.maxPages;
+      indexType = _args.indexType;
+      firstIndex = _args.firstIndex;
+      icrc85Collector = _args.icrc85Collector;
+    };
+    var icrc85_kill_switch : ?Bool = _args.icrc85KillSwitch;
     // LOCAL PATCH (upgrade keeps bounds): read the arguments the archive was
     // created with, which `initial_args` keeps across upgrades. Upstream binds
     // `args` to `_args`, and `upgradeArchive` upgrades with placeholders
@@ -149,7 +168,7 @@ shared ({ caller = ledger_canister_id }) persistent actor class Archive (_args :
       {
         advanced = ?{
           icrc85 = ?{
-            kill_switch = null;
+            kill_switch = icrc85_kill_switch; // LOCAL PATCH (archive kill switch): was `null`
             handler = null;
             period = null;  // default 30 days
             initialWait = ?(ONE_DAY * 7);  // 7 day grace period
@@ -182,7 +201,8 @@ shared ({ caller = ledger_canister_id }) persistent actor class Archive (_args :
       {
           var org_icdevs_timer_tool = ?org_icdevs_timer_tool();
           var collector = args.icrc85Collector;
-          advanced = null;
+          // LOCAL PATCH (archive kill switch): was `advanced = null`
+          advanced = ?{ kill_switch = icrc85_kill_switch; handler = null; tree = null };
       }
     };
 

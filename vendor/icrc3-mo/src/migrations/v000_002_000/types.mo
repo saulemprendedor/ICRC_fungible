@@ -227,6 +227,9 @@ module {
       indexType : SW.IndexType;
       firstIndex : Nat;
       icrc85Collector : ?Principal;  // Optional ICRC-85 collector for Open Value Sharing
+      // LOCAL PATCH (archive kill switch): the ledger's icrc3 ICRC-85 kill switch,
+      // so an archive shares only when its ledger does. `null` shares, as before.
+      icrc85KillSwitch : ?Bool;
     };
 
     /// Statistics for the Archive canister
@@ -271,6 +274,10 @@ module {
       advanced : ?{
         updated_certification : ?((Blob, Nat) -> Bool); //called when a certification has been made
         icrc85 : ?ICRC85Environment;
+        // LOCAL PATCH (controllers at archive creation): extra controllers for
+        // each NEW archive, read when the archive is created. Added to the
+        // configured set only when `archiveControllers` is managed (not `null`).
+        get_archive_controllers : ?(() -> [Principal]);
       };
       get_certificate_store : ?(() -> CertTree.Store); //needed to pass certificate store to the class
       /// TimerTool instance for scheduling ICRC-85 cycle shares

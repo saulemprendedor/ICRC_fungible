@@ -133,7 +133,7 @@ shared ({ caller = _owner }) persistent actor class Token (args: ?{
     include ICRC3Mixin({
       ICRC3.defaultMixinArgs(org_icdevs_class_plus_manager) with
       args = ?icrc3_args;
-      pullEnvironment = ?(func() : ICRC3.Environment {{advanced = ?{updated_certification = null; icrc85 = null;}; get_certificate_store = null; var org_icdevs_timer_tool : ?TimerTool.TimerTool = null; }});
+      pullEnvironment = ?(func() : ICRC3.Environment {{advanced = ?{updated_certification = null; icrc85 = null; get_archive_controllers = null;}; get_certificate_store = null; var org_icdevs_timer_tool : ?TimerTool.TimerTool = null; }});
     });
 
     include ICRC1Mixin({

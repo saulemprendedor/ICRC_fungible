@@ -142,6 +142,7 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
 
   func get_icrc3_environment() : ICRC3.Environment {{
     advanced = ?{
+      get_archive_controllers = null;
       updated_certification = ?updated_certification;
       icrc85 = null;
     };
