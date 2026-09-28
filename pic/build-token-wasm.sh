@@ -23,6 +23,10 @@ ALL=(
   "dummy_collector:pic/DummyCollector.mo"
   "raw_caller:pic/RawCaller.mo"
   "interleave_caller:pic/InterleaveCaller.mo"
+  # Not in dfx.json: the ledger BEFORE ICRC-85 was switched off, built from git
+  # history by pic/build-baseline-wasm.sh (the positive controls and upgrade
+  # tests of pic/icrc85_off.test.ts need it).
+  "token_baseline:@baseline"
 )
 
 MOC="$(mops toolchain bin moc)"
@@ -43,6 +47,11 @@ for name in "${targets[@]}"; do
   if [ -z "$main" ]; then
     echo "unknown canister: $name" >&2
     exit 1
+  fi
+
+  if [ "$main" = "@baseline" ]; then
+    bash "$ROOT/pic/build-baseline-wasm.sh"
+    continue
   fi
 
   out_dir=".dfx/local/canisters/$name"

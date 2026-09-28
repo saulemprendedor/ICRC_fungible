@@ -11,6 +11,7 @@
 # The throwaway worktree is removed on exit.
 #
 # Usage: bash pic/build-baseline-wasm.sh [ref]    (default: BASELINE_REF below)
+# pic/build-token-wasm.sh runs it as its `token_baseline` target.
 set -euo pipefail
 
 # The library's main before the ICRC-85 switches landed.
@@ -26,6 +27,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if ! git cat-file -e "$BASELINE_REF^{commit}" 2>/dev/null; then
+  echo "baseline $BASELINE_REF is not in this clone's history (shallow clone?): git fetch --unshallow, or pass a ref" >&2
+  exit 1
+fi
 git worktree add --detach "$TMP/src" "$BASELINE_REF" >/dev/null
 (
   cd "$TMP/src"

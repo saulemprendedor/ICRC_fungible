@@ -39,7 +39,10 @@ export function wasmPath(envVar: string, dfxName: string): string {
     ? resolve(process.env[envVar] as string)
     : resolve(__dirname, `../.dfx/local/canisters/${dfxName}/${dfxName}.wasm.gz`);
   if (!existsSync(p)) {
-    throw new Error(`WASM not found at ${p}. Run 'bash pic/build-token-wasm.sh' first.`);
+    throw new Error(
+      `WASM not found at ${p}. Run 'bash pic/build-token-wasm.sh' first ` +
+      `(it builds every wasm the pic tests load, token_baseline included, which needs git history).`,
+    );
   }
   return p;
 }
