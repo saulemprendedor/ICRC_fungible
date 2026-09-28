@@ -211,10 +211,22 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       switch(_timerTool) {
         case(?tt) tt;
         case(null) {
-          // Create TimerTool with null environment (default behavior)
-          // ICRC-1 and ICRC-3 will use this tool for their own purposes
+          // ICRC-1 and ICRC-3 use this tool for their own purposes too.
+          // ICRC-85 is OFF: this token shares no cycles, through any stream.
+          // TimerTool schedules its own share unless this switch is `?true`,
+          // and a share queued by an earlier build returns before sending.
+          // `pic/TokenWithICRC85.mo` shows how to turn sharing on.
           let ttEnv : TT.Environment = {
-            advanced = null;
+            advanced = ?{ icrc85 = ?{
+              kill_switch = ?true;
+              handler = null;
+              period = null;
+              initialWait = null;
+              asset = null;
+              platform = null;
+              tree = null;
+              collector = null;
+            } };
             syncUnsafe = null;
             reportExecution = null;
             reportError = null;
@@ -253,9 +265,18 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   private func get_icrc3_environment() : ICRC3.Environment{
       {
         advanced = ?{
-          get_archive_controllers = null;
+          // Each new archive gets the current owner as a controller when it is
+          // created (when `archiveControllers` is managed).
+          get_archive_controllers = ?(func () : [Principal] { [owner] });
           updated_certification = ?updated_certification;
-          icrc85 = null;
+          // ICRC-85 OFF for the icrc3 stream, and for every archive, which
+          // takes this switch at creation. A `null` environment here does NOT
+          // switch it off: it means "default collector, no kill switch".
+          icrc85 = ?{
+            var org_icdevs_timer_tool = ?getTimerTool();
+            var collector = null;
+            advanced = ?{ kill_switch = ?true; handler = null; tree = null };
+          };
         };
         get_certificate_store = ?get_certificate_store;
         var org_icdevs_timer_tool = ?getTimerTool();
@@ -333,11 +354,14 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     {
       advanced = ?{
         icrc85 = {
-          kill_switch = null;
+          // No library reads this top-level field: set alone, the icrc1 stream
+          // keeps sharing. Set for readers; the switch is `advanced` below.
+          kill_switch = ?true;
           handler = null;
           tree = null;
           collector = null;
-          advanced = null;
+          // ICRC-85 OFF for the icrc1 stream.
+          advanced = ?{ kill_switch = ?true; handler = null; tree = null };
         };
         get_fee = null;
         fee_validation_mode = ?#Strict;
@@ -951,7 +975,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       Runtime.trap("Upgrade already complete");
     };
     try{ 
-      let _result = await UpgradeArchive.upgradeArchive(Iter.toArray<Principal>(Map.keys(icrc3().get_state().archives)));
+      // An archive created before the archive kill switch existed takes it here.
+      let _result = await UpgradeArchive.upgradeArchiveWith(Iter.toArray<Principal>(Map.keys(icrc3().get_state().archives)), { icrc85KillSwitch = ?true });
       upgradeComplete := true;
     } catch(e){
       upgradeError := Error.message(e);
