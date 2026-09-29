@@ -193,6 +193,33 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       not Principal.isAnonymous(caller) and caller == owner
     };
 
+    /// Set for good by `admin_lock_supply`. Once `true`, `mint` is refused and
+    /// `admin_update_icrc1` refuses any batch that touches the minting account
+    /// or the maximum supply. No method sets it back to `false`.
+    ///
+    /// What it does NOT do:
+    ///  - It is irreversible in this code only. A controller can upgrade the
+    ///    canister to a wasm without it, or reinstall it, and the lock is gone.
+    ///  - It does not close the ICRC paths. When the minting account is an
+    ///    account somebody can sign for, an `icrc1_transfer`, an
+    ///    `icrc2_transfer_from` (after an approval by that account) or an
+    ///    `icrc4_transfer_batch` from it is still recorded as a mint. With the
+    ///    minting account set to this canister's own principal nobody can sign
+    ///    for it; this library does not check that, the deployer must.
+    var supplyLocked : Bool = false;
+
+    /// Whether a ledger-info batch changes what can be minted. Pure: `inspect`
+    /// and the body of `admin_update_icrc1` share it, so they cannot drift.
+    func touchesSupply(requests : [ICRC1.UpdateLedgerInfoRequest]) : Bool {
+      for (request in requests.vals()) {
+        switch (request) {
+          case (#MintingAccount _ or #MaxSupply _) return true;
+          case (_) {};
+        };
+      };
+      false
+    };
+
     // The principal the owner proposed as its successor. It holds no power:
     // `owner` changes only when this principal calls `accept_ownership`.
     var pending_owner : ?Principal = null;
@@ -562,6 +589,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     #admin_update_icrc4 : () -> [ICRC4.UpdateLedgerInfoRequest];
     #admin_set_index_canister : () -> ?Principal;
     #admin_init : () -> ();
+    #admin_lock_supply : () -> ();
+    #is_supply_locked : () -> ();
 
     // Other endpoints
     #mint : () -> ICRC1.Mint;
@@ -785,7 +814,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         or #admin_set_index_canister _ or #admin_init _ or #mint _ or #burn _
         or #get_icrc85_stats _ or #getUpgradeError _ or #upgradeArchive _
         or #update_archive_controllers _ or #get_index_canister _ or #deposit_cycles _
-        or #get_health _
+        or #get_health _ or #admin_lock_supply _ or #is_supply_locked _
       ) DEFAULT_ARG_CAP;
     };
   };
@@ -882,14 +911,22 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
 
       // ---- The current owner only, never anonymous, as the bodies have it ----
       case (#mint(getArgs)) {
+        // Once the supply is locked nobody mints; the argument is not decoded.
+        if (supplyLocked) return false;
         if (not isOwner(caller)) return false;
         let args = getArgs();
         ICRC1Inspect.isValidAccount(args.to, icrc1Config) and
         bounded(args.amount) and
         ICRC1Inspect.isValidMemo(args.memo, icrc1Config);
       };
+      // Once the supply is locked, a batch that touches the minting account or
+      // the maximum supply is refused whole, as the body refuses it. The batch
+      // is decoded only for the owner, and `argCap` has already bounded it.
+      case (#admin_update_icrc1(getArgs)) {
+        isOwner(caller) and (not supplyLocked or not touchesSupply(getArgs()));
+      };
       case (
-        #admin_update_icrc1 _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
+        #admin_update_icrc2 _ or #admin_update_icrc4 _
         or #admin_set_index_canister _
         or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
         // The archive methods follow the owner too, so their power goes with
@@ -898,6 +935,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         // and no wallet asks for it, so it is not part of the open reads.
         or #upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _
       ) isOwner(caller);
+
+      // Admitted for the owner locked or not: a second lock is the body's
+      // no-op, not an ingress refusal.
+      case (#admin_lock_supply _) isOwner(caller);
 
       // ---- The two steps of a hand-off, as the bodies have them. The
       // anonymous principal is refused whatever `owner` and `pending_owner`
@@ -920,6 +961,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         or #icrc107_get_fee_collector _ or #get_icrc85_stats _ or #get_index_canister _
         or #deposit_cycles _ or #get_data_certificate _ or #is_ledger_ready _
         or #get_health _ or #get_owner _ or #get_pending_owner _
+        or #is_supply_locked _
       ) true;
     };
   };
@@ -1108,6 +1150,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
 
   public shared ({ caller }) func mint(args : ICRC1.Mint) : async ICRC1.TransferResult {
       if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
+      // Before the first `await`: a mint that starts after the lock is refused.
+      if(supplyLocked){ Runtime.trap("Supply is locked: mint is disabled")};
 
       switch( await* icrc1().mint_tokens(caller, args)){
         case(#trappable(val)) val;
@@ -1280,8 +1324,25 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
 
   public shared ({ caller }) func admin_update_icrc1(requests : [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
     if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
+    // The whole batch, before any of it is applied: a partial apply would
+    // answer a vector that reads like success.
+    if(supplyLocked and touchesSupply(requests)){
+      Runtime.trap("Supply is locked: MintingAccount and MaxSupply cannot change");
+    };
     return icrc1().update_ledger_info(requests);
   };
+
+  /// Locks the supply for good: `mint` and any `admin_update_icrc1` batch that
+  /// touches the minting account or the maximum supply are refused from now
+  /// on. The owner only, never the anonymous principal. No method unlocks it,
+  /// and a second call changes nothing. See `supplyLocked` for what the lock
+  /// does not close.
+  public shared ({ caller }) func admin_lock_supply() : async () {
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
+    supplyLocked := true;
+  };
+
+  public query func is_supply_locked() : async Bool { supplyLocked };
 
   public shared ({ caller }) func admin_update_icrc2(requests : [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] {
     if(not isOwner(caller)){ Runtime.trap("Unauthorized")};

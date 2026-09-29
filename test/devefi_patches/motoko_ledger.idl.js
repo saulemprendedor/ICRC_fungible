@@ -473,6 +473,7 @@ export const idlFactory = ({ IDL }) => {
         [],
       ),
     'admin_propose_owner' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
+    'admin_lock_supply' : IDL.Func([], [], []),
     'archives' : IDL.Func([], [IDL.Vec(LegacyArchiveInfo)], []),
     'burn' : IDL.Func([BurnArgs], [TransferResult], []),
     'deposit_cycles' : IDL.Func([], [], []),
@@ -571,6 +572,7 @@ export const idlFactory = ({ IDL }) => {
         [TransferBatchResults],
         [],
       ),
+    'is_supply_locked' : IDL.Func([], [IDL.Bool], ['query']),
     'mint' : IDL.Func([Mint], [TransferResult], []),
     'set_icrc106_index_principal' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
     'update_archive_controllers' : IDL.Func(

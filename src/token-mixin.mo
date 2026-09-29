@@ -101,6 +101,10 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   func isOwner(caller : Principal) : Bool { not Principal.isAnonymous(caller) and caller == owner };
 
   var _init = false;
+  // Set for good by `admin_lock_supply`; see `src/Token.mo` for what it does
+  // not close (an upgrade removes it; transfers from a minting account somebody
+  // holds still mint).
+  var supplyLocked : Bool = false;
 
   // Index notification state
   var index_canister : ?Principal = null;
@@ -236,8 +240,15 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   // Token-specific endpoints (mint, burn, admin)
   // ==========================================================================
 
+  // Any `#MintingAccount` or `#MaxSupply` in a ledger-info batch.
+  func touchesSupply(r: [ICRC1.UpdateLedgerInfoRequest]) : Bool {
+    for(x in r.vals()) { switch(x) { case(#MintingAccount _ or #MaxSupply _) return true; case(_) {} } };
+    false
+  };
+
   public shared({caller}) func mint(a: ICRC1.Mint) : async ICRC1.TransferResult {
     if(not isOwner(caller)) Runtime.trap("Unauthorized");
+    if(supplyLocked) Runtime.trap("Supply is locked: mint is disabled");
     switch(await* icrc1().mint_tokens(caller, a)) { case(#trappable(v) or #awaited(v)) v; case(#err(#trappable(e) or #awaited(e))) Runtime.trap(e) };
   };
 
@@ -268,7 +279,18 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   };
   public query func get_owner() : async Principal { owner };
   public query func get_pending_owner() : async ?Principal { pending_owner };
-  public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] { if(not isOwner(caller)) Runtime.trap("Unauthorized"); icrc1().update_ledger_info(r) };
+  // A batch that touches the supply is refused whole once locked, before any of it applies.
+  public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
+    if(not isOwner(caller)) Runtime.trap("Unauthorized");
+    if(supplyLocked and touchesSupply(r)) Runtime.trap("Supply is locked: MintingAccount and MaxSupply cannot change");
+    icrc1().update_ledger_info(r)
+  };
+  // Owner only, never anonymous; irreversible; a second call changes nothing.
+  public shared({caller}) func admin_lock_supply() : async () {
+    if(not isOwner(caller)) Runtime.trap("Unauthorized");
+    supplyLocked := true;
+  };
+  public query func is_supply_locked() : async Bool { supplyLocked };
   public shared({caller}) func admin_update_icrc2(r: [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] { if(not isOwner(caller)) Runtime.trap("Unauthorized"); icrc2().update_ledger_info(r) };
   public shared({caller}) func admin_update_icrc4(r: [ICRC4.UpdateLedgerInfoRequest]) : async [Bool] { if(not isOwner(caller)) Runtime.trap("Unauthorized"); icrc4().update_ledger_info(r) };
 
