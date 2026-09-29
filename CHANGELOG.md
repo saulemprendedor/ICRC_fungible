@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then keeps it there. The library does not check this: a deployer must.
 - `src/snstest.mo`, `src/examples/*` and the `pic/TokenWithICRC85.mo` fixture have no lock.
 
+### Fixed
+
+- **`upgradeArchive` no longer fails in silence** (`src/Token.mo`). It dropped the per-archive
+  results, marked the upgrade complete even when every archive failed, and `getUpgradeError`
+  answered `""`. A ledger that ran it on an earlier build keeps that completion across the
+  upgrade: run `upgradeArchive(true)` once after upgrading and read every entry.
+
 ### Known issues
 
 - `icrc2-mo` 0.2.1 credits a mint from `icrc2_transfer_from` (`from` = the minting account)
@@ -74,6 +81,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`upgradeArchive` reports each archive** (`src/Token.mo`). It returns
+  `vec record { canister_id; result : variant { Ok; Err : text } }`, one entry per archive, where
+  it returned `()`; a caller that ignores the reply still decodes it. The upgrade completes only
+  when every entry is `Ok`, so after a failure `upgradeArchive(false)` runs again.
+  `getUpgradeError` answers the failures of the last run, joined with `"; "`, or `""`. A second
+  call while one is running traps `"Upgrade already in progress"`.
+- **An install with more than 8 principals in `archiveControllers` traps** (`src/Token.mo`),
+  besides the ledger itself. The IC allows 10 controllers per canister and the ledger adds itself
+  and the owner. An upgrade is never refused for a list stored before. On such a ledger
+  `update_archive_controllers` reports `#Err("… exceeds the IC limit of 10 controllers")` for every
+  archive and sends nothing.
 - **The owner of the ledger changes in two steps** (`src/Token.mo`, `src/token-mixin.mo`).
   `admin_propose_owner(?Principal)`, by the owner, names a successor; `accept_ownership()`, by
   that principal, completes the hand-off. Nothing moves until the proposed principal accepts, so
