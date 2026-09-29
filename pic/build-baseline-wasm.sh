@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
 #
-# Build the ledger as it was BEFORE ICRC-85 was switched off, for the upgrade
-# tests of pic/icrc85_off.test.ts: a ledger (and its archives) that shared
-# cycles, upgraded in place to the current build.
+# Build the ledger as it was at an earlier commit, for the tests that upgrade
+# it in place to the current build:
+#   token_baseline  (5fb6104) BEFORE ICRC-85 was switched off: a ledger, and its
+#                   archives, that shared cycles (pic/icrc85_off.test.ts)
+#   token_one_step  (bb166f8) BEFORE the two-step owner hand-off
+#                   (pic/owner_handoff.test.ts)
 #
-# It checks out BASELINE_REF into a throwaway git worktree, resolves that tree's
+# It checks out the ref into a throwaway git worktree, resolves that tree's
 # own dependencies, compiles its src/Token.mo with the same flags as
 # build-token-wasm.sh, and writes
-#   .dfx/local/canisters/token_baseline/token_baseline.wasm.gz
+#   .dfx/local/canisters/<name>/<name>.wasm.gz
 # The throwaway worktree is removed on exit.
 #
-# Usage: bash pic/build-baseline-wasm.sh [ref]    (default: BASELINE_REF below)
-# pic/build-token-wasm.sh runs it as its `token_baseline` target.
+# Usage: bash pic/build-baseline-wasm.sh [ref] [name]
+#        (defaults: BASELINE_REF below, token_baseline)
+# pic/build-token-wasm.sh runs it for its `token_baseline` and `token_one_step`
+# targets.
 set -euo pipefail
 
 # The library's main before the ICRC-85 switches landed.
 BASELINE_REF="${1:-5fb6104}"
+NAME="${2:-token_baseline}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -39,10 +45,10 @@ git worktree add --detach "$TMP/src" "$BASELINE_REF" >/dev/null
   SOURCES="$(mops sources | tr '\n' ' ')"
   echo "baseline $BASELINE_REF ($(git rev-parse --short HEAD)), moc $("$MOC" --version)"
   # shellcheck disable=SC2086
-  "$MOC" $SOURCES -v --incremental-gc -o "$TMP/token_baseline.wasm" src/Token.mo >/dev/null
+  "$MOC" $SOURCES -v --incremental-gc -o "$TMP/$NAME.wasm" src/Token.mo >/dev/null
 )
 
-out_dir=".dfx/local/canisters/token_baseline"
+out_dir=".dfx/local/canisters/$NAME"
 mkdir -p "$out_dir"
-gzip -9 -c "$TMP/token_baseline.wasm" > "$out_dir/token_baseline.wasm.gz"
-ls -la "$out_dir/token_baseline.wasm.gz"
+gzip -9 -c "$TMP/$NAME.wasm" > "$out_dir/$NAME.wasm.gz"
+ls -la "$out_dir/$NAME.wasm.gz"

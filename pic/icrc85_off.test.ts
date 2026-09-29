@@ -181,14 +181,27 @@ describe('a new archive is controlled by the current owner from creation', () =>
     expect(sorted(await pic.getControllers(first.canister_id)), 'first archive')
       .toEqual(sorted([configured, id, owner]));
 
+    // A proposal alone moves nothing: the archive created while it is pending
+    // gets the owner that proposed, and not the proposed principal.
     ledger.setPrincipal(owner);
-    expect(await ledger.admin_update_owner(next)).toBe(true);
+    await ledger.admin_propose_owner([next]);
+    await transferUntil(pic, ledger, owner, holder, async () => (await archives(ledger, id)).length >= 2);
+    for (let i = 0; i < 5; i++) await pic.tick();
+    const known = new Set([first.canister_id.toText()]);
+    const pending = (await archives(ledger, id)).find((a) => !known.has(a.canister_id.toText()))!;
+    known.add(pending.canister_id.toText());
+    expect(sorted(await pic.getControllers(pending.canister_id)), 'archive created during a pending hand-off')
+      .toEqual(sorted([configured, id, owner]));
+
+    ledger.setPrincipal(next);
+    await ledger.accept_ownership();
+    expect((await ledger.get_owner()).toText()).toBe(next.toText());
 
     // No mint after the hand-off: `mint` needs the current owner AND the
     // minting account, which stays the installer. The holder has enough.
-    await transferUntil(pic, ledger, next, holder, async () => (await archives(ledger, id)).length >= 2, 600, false);
+    await transferUntil(pic, ledger, next, holder, async () => (await archives(ledger, id)).length >= 3, 600, false);
     for (let i = 0; i < 5; i++) await pic.tick();
-    const second = (await archives(ledger, id)).find((a) => a.canister_id.toText() !== first.canister_id.toText())!;
+    const second = (await archives(ledger, id)).find((a) => !known.has(a.canister_id.toText()))!;
     expect(sorted(await pic.getControllers(second.canister_id)), 'archive created after the hand-off')
       .toEqual(sorted([configured, id, next]));
     expect(sorted(await pic.getControllers(first.canister_id)), 'first archive, unchanged by the hand-off')

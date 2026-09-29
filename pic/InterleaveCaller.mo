@@ -1,10 +1,14 @@
-/// A canister that sends two calls to a ledger without awaiting the first.
+/// A canister that sends two calls without awaiting the first, so that the
+/// second reaches a ledger while the first is suspended there.
 ///
 /// PocketIC's client sends ingress one message at a time, so it cannot put a
-/// second call on the ledger while the first is suspended at an `await`. Both
-/// calls here are enqueued before either is awaited: the ledger runs the first
-/// up to its first `await`, then the second, then the rest of the first.
-/// The canister must be the ledger's owner for both calls to be admitted.
+/// second call on the ledger while the first is suspended at an `await`.
+/// Here both calls are enqueued before either is awaited.
+///
+/// A hand-off takes two principals, so the test installs this canister twice:
+/// one instance is the ledger's owner and sends `update_archive_controllers`,
+/// the other is the proposed owner and accepts when the first asks it to.
+import List "mo:core/List";
 import Principal "mo:core/Principal";
 
 persistent actor class InterleaveCaller() {
@@ -14,17 +18,40 @@ persistent actor class InterleaveCaller() {
   };
   type Ledger = actor {
     update_archive_controllers : () -> async [ArchiveControllersResult];
-    admin_update_owner : Principal -> async Bool;
+    admin_propose_owner : ?Principal -> async ();
+    accept_ownership : () -> async ();
+  };
+  type Peer = actor { accept : Principal -> async () };
+
+  /// What came back, in the order it came back.
+  let events = List.empty<Text>();
+
+  public query func order() : async [Text] { List.toArray(events) };
+
+  /// Accepts a pending hand-off of `ledger` to this canister.
+  public shared func accept(ledger : Principal) : async () {
+    let l : Ledger = actor (Principal.toText(ledger));
+    await l.accept_ownership();
   };
 
-  /// `update_archive_controllers`, with `admin_update_owner(next)` sent before
-  /// the first is awaited. Returns the results of the first call.
+  /// As the owner of `ledger`, proposes `next`.
+  public shared func propose(ledger : Principal, next : Principal) : async () {
+    let l : Ledger = actor (Principal.toText(ledger));
+    await l.admin_propose_owner(?next);
+  };
+
+  /// `update_archive_controllers`, with the acceptance by `next` (another
+  /// instance of this canister, already proposed) sent before the first is
+  /// awaited. Returns the results of the first call.
   public shared func update_then_hand_off(ledger : Principal, next : Principal) : async [ArchiveControllersResult] {
     let l : Ledger = actor (Principal.toText(ledger));
+    let peer : Peer = actor (Principal.toText(next));
     let update = l.update_archive_controllers();
-    let handOff = l.admin_update_owner(next);
+    let handOff = peer.accept(ledger);
+    await handOff;
+    List.add(events, "accepted");
     let results = await update;
-    ignore await handOff;
+    List.add(events, "updated");
     results;
   };
 };

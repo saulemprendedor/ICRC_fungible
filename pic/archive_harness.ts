@@ -107,7 +107,10 @@ export const ledgerIdl: IDL.InterfaceFactory = ({ IDL }) => IDL.Service({
   ),
   upgradeArchive: IDL.Func([IDL.Bool], [], []),
   getUpgradeError: IDL.Func([], [IDL.Text], ['query']),
-  admin_update_owner: IDL.Func([IDL.Principal], [IDL.Bool], []),
+  admin_propose_owner: IDL.Func([IDL.Opt(IDL.Principal)], [], []),
+  accept_ownership: IDL.Func([], [], []),
+  get_owner: IDL.Func([], [IDL.Principal], ['query']),
+  get_pending_owner: IDL.Func([], [IDL.Opt(IDL.Principal)], ['query']),
 });
 
 export const archiveIdl: IDL.InterfaceFactory = ({ IDL }) => IDL.Service({
