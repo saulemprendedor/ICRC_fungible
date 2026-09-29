@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Every owner method refuses the anonymous caller** (`src/Token.mo`, `src/token-mixin.mo`),
+  in its body and, in `Token.mo`, in the ingress filter, whatever `owner` holds. `owner` starts as
+  whoever installed the ledger, so a ledger installed by the anonymous principal had an anonymous
+  owner, and then any anonymous caller could mint, rewrite the ledger info, set the index and the
+  fee collector, and administer the archives. One predicate, `isOwner`, now guards `mint`,
+  `admin_update_icrc1/2/4`, `admin_set_index_canister`, `set_icrc106_index_principal`,
+  `icrc107_set_fee_collector` (still `#Err(#AccessDenied)`), `upgradeArchive`,
+  `update_archive_controllers` and `getUpgradeError`. Such a ledger is now administered by nobody
+  instead of by everybody. Nothing changes for a caller that is not anonymous.
+- `admin_init` admits the owner or a controller that is not the anonymous principal. In
+  `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
+  a change for an authenticated stranger calling it (it only marks the ledger initialised).
+
 ### Changed
 
 - **The owner of the ledger changes in two steps** (`src/Token.mo`, `src/token-mixin.mo`).
@@ -31,9 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - It does not move the minting account, which is set at install and changed with
   `admin_update_icrc1`.
 - It does not repair a ledger whose owner is ALREADY the anonymous principal, which the
-  one-step method allowed. There, every other owner method still answers the anonymous caller,
-  and `admin_propose_owner` refuses it, so the ownership cannot be moved by a call: a controller
-  has to fix it with an upgrade. Read `get_owner` before relying on this release.
+  one-step method allowed, and which an install by the anonymous principal still produces. Every
+  owner method refuses the anonymous caller (see Security), and `admin_propose_owner` refuses it,
+  so the ownership cannot be moved by a call: a controller has to fix it with a reinstall. Read
+  `get_owner` before relying on this release.
 
 ### Removed
 
