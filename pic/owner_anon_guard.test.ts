@@ -182,6 +182,8 @@ class Ledger {
       methods.push(['upgradeArchive', enc([IDL.Bool], [true])]);
       methods.push(['update_archive_controllers', none]);
     }
+    // Last: a proposal that ran would show in `get_pending_owner`.
+    methods.push(['admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[this.alice]])]);
     return methods;
   }
 
@@ -329,6 +331,7 @@ for (const variant of VARIANTS) {
       expect(after.indexCanister).toEqual([l.alice.toText()]);
       expect(after.icrc106).toContain(l.alice.toText());
       expect(after.feeCollector).toContain(l.alice.toText());
+      expect(after.pending).toEqual([l.alice.toText()]);
       if (variant.archives) await expect(l.query('getUpgradeError', none, l.authenticated)).resolves.toBeDefined();
       await expect(l.send('admin_init', none, l.authenticated)).resolves.toBeDefined();
     });
