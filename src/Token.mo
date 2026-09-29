@@ -183,6 +183,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
 
     var owner = _owner;
 
+    // The principal the owner proposed as its successor. It holds no power:
+    // `owner` changes only when this principal calls `accept_ownership`.
+    var pending_owner : ?Principal = null;
+
     var icrc3_migration_state_new = icrc3_migration_state;
 
     // TimerTool state - stored in stable memory to survive upgrades
@@ -266,7 +270,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       {
         advanced = ?{
           // Each new archive gets the current owner as a controller when it is
-          // created (when `archiveControllers` is managed).
+          // created (when `archiveControllers` is managed). While a hand-off is
+          // pending that is still the owner that proposed it: the proposed
+          // principal has proven nothing yet. Once it accepts, it runs
+          // `update_archive_controllers` to take the archives that exist.
           get_archive_controllers = ?(func () : [Principal] { [owner] });
           updated_certification = ?updated_certification;
           // ICRC-85 OFF for the icrc3 stream, and for every archive, which
@@ -532,7 +539,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     #is_ledger_ready : () -> ();
 
     // Admin endpoints
-    #admin_update_owner : () -> Principal;
+    #admin_propose_owner : () -> ?Principal;
+    #accept_ownership : () -> ();
+    #get_owner : () -> ();
+    #get_pending_owner : () -> ();
     #admin_update_icrc1 : () -> [ICRC1.UpdateLedgerInfoRequest];
     #admin_update_icrc2 : () -> [ICRC2.UpdateLedgerInfoRequest];
     #admin_update_icrc4 : () -> [ICRC4.UpdateLedgerInfoRequest];
@@ -756,7 +766,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         or #icrc4_maximum_query_batch_size _ or #icrc106_get_index_principal _
         or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
         or #icrc107_get_fee_collector _ or #get_data_certificate _ or #is_ledger_ready _
-        or #admin_update_owner _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
+        or #admin_propose_owner _ or #accept_ownership _ or #get_owner _
+        or #get_pending_owner _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
         or #admin_set_index_canister _ or #admin_init _ or #mint _ or #burn _
         or #get_icrc85_stats _ or #getUpgradeError _ or #upgradeArchive _
         or #update_archive_controllers _ or #get_index_canister _ or #deposit_cycles _
@@ -776,7 +787,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   ///     having installed or for controlling the canister.
   ///  2. A method whose body admits one principal is refused here for anyone
   ///     else, with the same predicate the body applies. For the owner that is
-  ///     the CURRENT `owner`, which `admin_update_owner` changes. It is not
+  ///     the CURRENT `owner`, which `accept_ownership` changes. It is not
   ///     `_owner`, the class parameter, which is whoever performed the last
   ///     install or upgrade of the canister.
   ///  3. Reads stay open to every caller, the anonymous principal included,
@@ -864,14 +875,20 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       };
       case (
         #admin_update_icrc1 _ or #admin_update_icrc2 _ or #admin_update_icrc4 _
-        or #admin_update_owner _ or #admin_set_index_canister _
+        or #admin_set_index_canister _
         or #set_icrc106_index_principal _ or #icrc107_set_fee_collector _
         // The archive methods follow the owner too, so their power goes with
-        // `admin_update_owner` and upgrading the canister grants nothing.
+        // the hand-off and upgrading the canister grants nothing.
         // `getUpgradeError` is a read, but its body answers the owner alone
         // and no wallet asks for it, so it is not part of the open reads.
         or #upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _
       ) caller == owner;
+
+      // ---- The two steps of a hand-off, as the bodies have them. The
+      // anonymous principal is refused whatever `owner` and `pending_owner`
+      // hold, and with nothing pending nobody can accept. ----
+      case (#admin_propose_owner _) not Principal.isAnonymous(caller) and caller == owner;
+      case (#accept_ownership _) not Principal.isAnonymous(caller) and ?caller == pending_owner;
 
       // ---- The owner or a controller, as the body has it ----
       case (#admin_init _) caller == owner or Principal.isController(caller);
@@ -887,7 +904,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         or #icrc4_maximum_query_batch_size _ or #icrc106_get_index_principal _
         or #icrc107_get_fee_collector _ or #get_icrc85_stats _ or #get_index_canister _
         or #deposit_cycles _ or #get_data_certificate _ or #is_ledger_ready _
-        or #get_health _
+        or #get_health _ or #get_owner _ or #get_pending_owner _
       ) true;
     };
   };
@@ -1002,7 +1019,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     if(caller != owner){ Runtime.trap("Unauthorized")};
 
     // Read once, before any `await`: every archive of this call gets the same
-    // set even if `admin_update_owner` interleaves, and an archive created
+    // set even if `accept_ownership` interleaves, and an archive created
     // mid-loop is left to the next call.
     let current_owner = owner;
     let archives = Iter.toArray<Principal>(Map.keys(icrc3().get_state().archives));
@@ -1215,11 +1232,36 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       ?icrc4().get_state().ledger_info.max_balances;
   };
 
-  public shared ({ caller }) func admin_update_owner(new_owner : Principal) : async Bool {
+  /// The owner changes in two steps, so that a mistyped principal, or one
+  /// nobody holds the key of, can never take the ledger's administration
+  /// with it: nothing moves until the proposed principal proves it can act.
+  ///
+  /// Step 1, by the owner. `?p` proposes `p` and replaces any earlier
+  /// proposal; `null` cancels. The proposal grants `p` nothing.
+  public shared ({ caller }) func admin_propose_owner(proposed : ?Principal) : async () {
+    if(Principal.isAnonymous(caller)){ Runtime.trap("Unauthorized")};
     if(caller != owner){ Runtime.trap("Unauthorized")};
-    owner := new_owner;
-    return true;
+    switch(proposed){
+      case(?p){
+        if(Principal.isAnonymous(p)){ Runtime.trap("The anonymous principal cannot be the owner")};
+        if(p == owner){ Runtime.trap("That principal is already the owner")};
+      };
+      case(null){};
+    };
+    pending_owner := proposed;
   };
+
+  /// Step 2, by the proposed principal, and by nobody else.
+  public shared ({ caller }) func accept_ownership() : async () {
+    if(Principal.isAnonymous(caller)){ Runtime.trap("Unauthorized")};
+    if(?caller != pending_owner){ Runtime.trap("Unauthorized")};
+    owner := caller;
+    pending_owner := null;
+  };
+
+  public query func get_owner() : async Principal { owner };
+
+  public query func get_pending_owner() : async ?Principal { pending_owner };
 
   public shared ({ caller }) func admin_update_icrc1(requests : [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
     if(caller != owner){ Runtime.trap("Unauthorized")};

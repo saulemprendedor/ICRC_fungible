@@ -92,6 +92,8 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   
   let cert_store : CertTree.Store = CertTree.newStore();
   var owner = _owner;
+  // Proposed by the owner as its successor; holds no power until it accepts.
+  var pending_owner : ?Principal = null;
   var _init = false;
 
   // Index notification state
@@ -237,7 +239,29 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
     switch(await* icrc1().burn_tokens(caller, a, false)) { case(#trappable(v) or #awaited(v)) v; case(#err(#trappable(e) or #awaited(e))) Runtime.trap(e) };
   };
 
-  public shared({caller}) func admin_update_owner(n: Principal) : async Bool { if(caller != owner) Runtime.trap("Unauthorized"); owner := n; true };
+  // The owner changes in two steps: nothing moves until the proposed principal
+  // accepts, so a mistyped principal cannot take the administration with it.
+  // `null` cancels a proposal; a new proposal replaces the pending one.
+  public shared({caller}) func admin_propose_owner(proposed: ?Principal) : async () {
+    if(Principal.isAnonymous(caller)) Runtime.trap("Unauthorized");
+    if(caller != owner) Runtime.trap("Unauthorized");
+    switch(proposed){
+      case(?p){
+        if(Principal.isAnonymous(p)) Runtime.trap("The anonymous principal cannot be the owner");
+        if(p == owner) Runtime.trap("That principal is already the owner");
+      };
+      case(null){};
+    };
+    pending_owner := proposed;
+  };
+  public shared({caller}) func accept_ownership() : async () {
+    if(Principal.isAnonymous(caller)) Runtime.trap("Unauthorized");
+    if(?caller != pending_owner) Runtime.trap("Unauthorized");
+    owner := caller;
+    pending_owner := null;
+  };
+  public query func get_owner() : async Principal { owner };
+  public query func get_pending_owner() : async ?Principal { pending_owner };
   public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] { if(caller != owner) Runtime.trap("Unauthorized"); icrc1().update_ledger_info(r) };
   public shared({caller}) func admin_update_icrc2(r: [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] { if(caller != owner) Runtime.trap("Unauthorized"); icrc2().update_ledger_info(r) };
   public shared({caller}) func admin_update_icrc4(r: [ICRC4.UpdateLedgerInfoRequest]) : async [Bool] { if(caller != owner) Runtime.trap("Unauthorized"); icrc4().update_ledger_info(r) };

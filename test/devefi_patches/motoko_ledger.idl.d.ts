@@ -257,6 +257,7 @@ export interface Tip {
   'last_block_hash' : Uint8Array | number[],
 }
 export interface Token {
+  'accept_ownership' : ActorMethod<[], undefined>,
   'admin_init' : ActorMethod<[], undefined>,
   'admin_update_icrc1' : ActorMethod<
     [Array<UpdateLedgerInfoRequest__2>],
@@ -270,7 +271,7 @@ export interface Token {
     [Array<UpdateLedgerInfoRequest>],
     Array<boolean>
   >,
-  'admin_update_owner' : ActorMethod<[Principal], boolean>,
+  'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
   'archives' : ActorMethod<[], Array<LegacyArchiveInfo>>,
   'burn' : ActorMethod<[BurnArgs], TransferResult>,
   'deposit_cycles' : ActorMethod<[], undefined>,
@@ -279,6 +280,8 @@ export interface Token {
     [{ 'start' : bigint, 'length' : bigint }],
     RosettaGetBlocksResponse
   >,
+  'get_owner' : ActorMethod<[], Principal>,
+  'get_pending_owner' : ActorMethod<[], [] | [Principal]>,
   'get_tip' : ActorMethod<[], Tip>,
   'get_transactions' : ActorMethod<
     [{ 'start' : bigint, 'length' : bigint }],

@@ -326,11 +326,13 @@ export interface Tip {
   'last_block_hash' : Uint8Array | number[],
 }
 export interface Token {
+  'accept_ownership' : ActorMethod<[], undefined>,
   'admin_init' : ActorMethod<[], undefined>,
   /**
    * / Configure the index canister for push notifications
    * / Set to null to disable notifications
    */
+  'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
   'admin_set_index_canister' : ActorMethod<[[] | [Principal]], boolean>,
   'admin_update_icrc1' : ActorMethod<
     [Array<UpdateLedgerInfoRequest__2>],
@@ -344,7 +346,6 @@ export interface Token {
     [Array<UpdateLedgerInfoRequest>],
     Array<boolean>
   >,
-  'admin_update_owner' : ActorMethod<[Principal], boolean>,
   'archives' : ActorMethod<[], Array<LegacyArchiveInfo>>,
   'burn' : ActorMethod<[BurnArgs], TransferResult>,
   'deposit_cycles' : ActorMethod<[], undefined>,
@@ -376,6 +377,8 @@ export interface Token {
    * / Get the currently configured index canister
    */
   'get_index_canister' : ActorMethod<[], [] | [Principal]>,
+  'get_owner' : ActorMethod<[], Principal>,
+  'get_pending_owner' : ActorMethod<[], [] | [Principal]>,
   'get_tip' : ActorMethod<[], Tip>,
   'get_transactions' : ActorMethod<
     [{ 'start' : bigint, 'length' : bigint }],
