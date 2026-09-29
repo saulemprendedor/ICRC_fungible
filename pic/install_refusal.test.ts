@@ -341,15 +341,23 @@ for (const variant of VARIANTS) {
       t = await Bench.create(variant);
       const id = await t.emptyCanister();
       await t.install(id, t.anonymous, 'no args', variant.preRefusalWasm);
-      const before = await t.moduleHash(id);
+      const preRefusal = await t.moduleHash(id);
       const upgrades: Array<[string, Principal, Minting]> = [
         ['an authenticated controller', t.b, 'no args'],
         ['the anonymous controller', t.anonymous, 'no args'],
         ['an authenticated controller, with an anonymous minting account in its args', t.b, acct(t.anonymous)],
       ];
+      // The hash of the current build, read from a ledger installed with it.
+      // Only the first upgrade changes the module, so for the others the hash
+      // says which build is installed, and it is the call not being rejected
+      // that says the upgrade was not refused.
+      const probe = await t.emptyCanister();
+      await t.install(probe, t.a, 'no args');
+      const current = await t.moduleHash(probe);
+      expect(current, 'the current build').not.toBe(preRefusal);
       for (const [why, sender, minting] of upgrades) {
-        await t.upgrade(id, sender, minting);
-        expect(await t.moduleHash(id), why).not.toBe(before);
+        await expect(t.upgrade(id, sender, minting), why).resolves.toBeUndefined();
+        expect(await t.moduleHash(id), why).toBe(current);
         expect(await t.owner(id), why).toBe('2vxsx-fae');
         expect(await t.minter(id), why).toEqual(['2vxsx-fae']);
       }
