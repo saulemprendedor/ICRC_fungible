@@ -122,10 +122,24 @@ archive sharing, through two streams (`org.icdevs.icrc85.supertimer` and
 The ledger decides who controls a new archive through `archiveControllers`,
 but it cannot add a principal only it knows at creation time, such as a mutable
 owner. The environment's `advanced` gains
-`get_archive_controllers : ?(() -> [Principal])`, read when each archive is
-created. When `archiveControllers` is managed (`?list` or `?null`), its result
-joins the set; when it is `null` (unmanaged), nothing is written, as before.
-Every consumer's environment literal adds `get_archive_controllers = null`.
+`get_archive_controllers : ?(() -> [Principal])`. When `archiveControllers` is
+managed (`?list` or `?null`), its result joins the set; when it is `null`
+(unmanaged), nothing is written, as before. Every consumer's environment literal
+adds `get_archive_controllers = null`.
+
+When it is read: after the archive exists, not before. Each creation site first
+awaits `Archive.Archive(...)`, which creates and installs the archive with the
+ledger as its only controller. Then it calls `ignore update_controllers(archive)`.
+`update_controllers` is a local `async` function, so its body runs as a
+separate message the ledger sends to itself. That message calls
+`get_archive_controllers` and sends `update_settings` without awaiting it.
+Nothing is captured when the creation starts, so:
+
+- the principals are the ones returned when that message runs. A hand-off
+  accepted while the archive was being created is picked up;
+- until that message runs, the new archive is controlled by the ledger alone;
+- a rejected `update_settings` is not reported. The ledger's
+  `update_archive_controllers` sets the controllers again and reports each archive.
 
 Upstream also applied the controller set to the **first** archive only: the
 branch that creates the next archive when the last one is full never called
