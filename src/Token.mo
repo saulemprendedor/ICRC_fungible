@@ -186,8 +186,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     /// The one owner predicate, for every body guard, every owner arm of
     /// `inspect` and `argCap`. `owner` starts as whoever installed the ledger,
     /// so it can be the anonymous principal; the anonymous caller is refused
-    /// whatever `owner` holds, and such a ledger is administered by nobody
-    /// instead of by everybody.
+    /// whatever `owner` holds. That closes the owner methods only: a ledger
+    /// installed by the anonymous principal still has it as a controller and,
+    /// by default, as its minting account.
     func isOwner(caller : Principal) : Bool {
       not Principal.isAnonymous(caller) and caller == owner
     };
@@ -283,7 +284,11 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
           // pending that is still the owner that proposed it: the proposed
           // principal has proven nothing yet. Once it accepts, it runs
           // `update_archive_controllers` to take the archives that exist.
-          get_archive_controllers = ?(func () : [Principal] { [owner] });
+          // An anonymous owner is never added: anyone could then administer
+          // the archive through the management canister.
+          get_archive_controllers = ?(func () : [Principal] {
+            if (Principal.isAnonymous(owner)) [] else [owner]
+          });
           updated_certification = ?updated_certification;
           // ICRC-85 OFF for the icrc3 stream, and for every archive, which
           // takes this switch at creation. A `null` environment here does NOT
