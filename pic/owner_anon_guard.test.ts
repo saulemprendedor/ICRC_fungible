@@ -266,10 +266,12 @@ for (const variant of VARIANTS) {
       expect(await l.state(), 'after every refused owner method').toEqual(before);
     });
 
+    // Any refusal will do here, so that with the filter's arm opened the body
+    // still has to refuse; the filter's own refusal is pinned below.
     it('admin_init is refused to the anonymous principal although it is a controller', async () => {
       const failure = await failureOf(l.send('admin_init', none, l.anonymous));
       expect(failure).not.toBeNull();
-      expect(failure!.message).toMatch(variant.filtered ? REFUSED : UNAUTHORIZED);
+      expect(failure!.message).toMatch(variant.filtered ? new RegExp(`${REFUSED.source}|unauthorized`, 'i') : UNAUTHORIZED);
     });
 
     it('a controller that is not anonymous still runs admin_init', async () => {
@@ -278,7 +280,7 @@ for (const variant of VARIANTS) {
 
     if (variant.filtered) {
       it('the filter refuses every owner method from the anonymous principal, at no cost to the ledger', async () => {
-        const methods = [...await l.ownerUpdates(), ['getUpgradeError', none] as [string, Uint8Array]];
+        const methods: Array<[string, Uint8Array]> = [...await l.ownerUpdates(), ['getUpgradeError', none], ['admin_init', none]];
         for (const [method, arg] of methods) {
           let failure: Error | null = null;
           const spent = await (async () => {
@@ -350,3 +352,67 @@ for (const variant of VARIANTS) {
     });
   });
 }
+
+// ---- A new archive of a ledger whose owner is anonymous ----
+
+const TransferArgs = IDL.Record({
+  to: Account,
+  fee: IDL.Opt(IDL.Nat),
+  memo: IDL.Opt(IDL.Vec(IDL.Nat8)),
+  from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
+  created_at_time: IDL.Opt(IDL.Nat64),
+  amount: IDL.Nat,
+});
+const ArchiveInfo = IDL.Record({ canister_id: IDL.Principal, start: IDL.Nat, end: IDL.Nat });
+const GetArchivesArgs = IDL.Record({ from: IDL.Opt(IDL.Principal) });
+
+describe('anonymous owner, Token.mo: a new archive', () => {
+  // Small limits, so a few dozen blocks spin off an archive (as in archive_owner.test.ts).
+  const ARCHIVE_LIMITS = {
+    maxActiveRecords: 10n,
+    settleToRecords: 5n,
+    maxRecordsInArchiveInstance: 15n,
+    maxArchivePages: 62_500n,
+    archiveIndexType: { Stable: null },
+    maxRecordsToArchive: 10n,
+    archiveCycles: 2_000_000_000_000n,
+    supportedBlocks: [],
+  };
+
+  it('does not get the anonymous owner as a controller', async () => {
+    const configured = createIdentity(6).getPrincipal();
+    const variant: Variant = {
+      ...VARIANTS[0],
+      installArg: enc([IDL.Opt(IDL.Record({ ...sections, icrc3: IDL.Opt(ICRC3InitArgs) }))],
+        [[{ icrc1: [], icrc2: [], icrc4: [], icrc3: [{ ...ARCHIVE_LIMITS, archiveControllers: [[[configured]]] }] }]]),
+    };
+    const l = await Ledger.create(variant, Principal.anonymous());
+    try {
+      expect((await l.state()).owner).toBe('2vxsx-fae');
+      // `mint` refuses the anonymous owner, but the anonymous principal is also the
+      // default minting account, and a transfer from it is a mint (CHANGELOG: what
+      // the guard leaves open). That is what fills the log here.
+      for (let i = 0; i < 40; i++) {
+        await l.send('icrc1_transfer', enc([TransferArgs], [{
+          to: { owner: l.alice, subaccount: [] }, fee: [], memo: [], from_subaccount: [],
+          created_at_time: [], amount: 1_000_000n + BigInt(i),
+        }]), l.anonymous);
+      }
+      let archives: Principal[] = [];
+      for (let round = 0; round < 30 && archives.length === 0; round++) {
+        await l.pic.advanceTime(10_000);
+        await l.pic.tick(5);
+        const reply = await l.query('icrc3_get_archives', enc([GetArchivesArgs], [{ from: [] }]));
+        archives = (IDL.decode([IDL.Vec(ArchiveInfo)], reply)[0] as unknown as { canister_id: Principal }[])
+          .map((a) => a.canister_id).filter((p) => p.toText() !== l.id.toText());
+      }
+      expect(archives.length, 'archives created').toBeGreaterThan(0);
+      for (const a of archives) {
+        const controllers = (await l.pic.getControllers(a)).map((p) => p.toText()).sort();
+        expect(controllers, a.toText()).toEqual([configured.toText(), l.id.toText()].sort());
+      }
+    } finally {
+      await l.tearDown();
+    }
+  });
+});
