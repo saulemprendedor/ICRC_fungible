@@ -183,6 +183,15 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
 
     var owner = _owner;
 
+    /// The one owner predicate, for every body guard, every owner arm of
+    /// `inspect` and `argCap`. `owner` starts as whoever installed the ledger,
+    /// so it can be the anonymous principal; the anonymous caller is refused
+    /// whatever `owner` holds, and such a ledger is administered by nobody
+    /// instead of by everybody.
+    func isOwner(caller : Principal) : Bool {
+      not Principal.isAnonymous(caller) and caller == owner
+    };
+
     // The principal the owner proposed as its successor. It holds no power:
     // `owner` changes only when this principal calls `accept_ownership`.
     var pending_owner : ?Principal = null;
@@ -752,7 +761,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       // and the largest such call is a full batch.
       case (#icrc21_canister_call_consent_message _) transferBatchCap() + CONSENT_FRAMING_BYTES;
       case (#admin_update_icrc1 _) {
-        if (caller == owner) OWNER_INFO_ARG_CAP else DEFAULT_ARG_CAP;
+        if (isOwner(caller)) OWNER_INFO_ARG_CAP else DEFAULT_ARG_CAP;
       };
       case (
         #icrc1_name _ or #icrc1_symbol _ or #icrc1_decimals _ or #icrc1_fee _
@@ -789,7 +798,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   ///     else, with the same predicate the body applies. For the owner that is
   ///     the CURRENT `owner`, which `accept_ownership` changes. It is not
   ///     `_owner`, the class parameter, which is whoever performed the last
-  ///     install or upgrade of the canister.
+  ///     install or upgrade of the canister. The owner predicate is `isOwner`,
+  ///     which refuses the anonymous principal even when it is the owner.
   ///  3. Reads stay open to every caller, the anonymous principal included,
   ///     when they arrive as update calls. Wallets and indexers read balances,
   ///     allowances and blocks through certified update calls; refusing them
@@ -865,9 +875,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         bounded(args.amount) and ICRC1Inspect.inspectBurn(args, ?icrc1Config);
       };
 
-      // ---- The current owner only, as the bodies have it ----
+      // ---- The current owner only, never anonymous, as the bodies have it ----
       case (#mint(getArgs)) {
-        if (caller != owner) return false;
+        if (not isOwner(caller)) return false;
         let args = getArgs();
         ICRC1Inspect.isValidAccount(args.to, icrc1Config) and
         bounded(args.amount) and
@@ -882,7 +892,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         // `getUpgradeError` is a read, but its body answers the owner alone
         // and no wallet asks for it, so it is not part of the open reads.
         or #upgradeArchive _ or #update_archive_controllers _ or #getUpgradeError _
-      ) caller == owner;
+      ) isOwner(caller);
 
       // ---- The two steps of a hand-off, as the bodies have them. The
       // anonymous principal is refused whatever `owner` and `pending_owner`
@@ -890,8 +900,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       case (#admin_propose_owner _) not Principal.isAnonymous(caller) and caller == owner;
       case (#accept_ownership _) not Principal.isAnonymous(caller) and ?caller == pending_owner;
 
-      // ---- The owner or a controller, as the body has it ----
-      case (#admin_init _) caller == owner or Principal.isController(caller);
+      // ---- The owner or a controller, never anonymous, as the body has it ----
+      case (#admin_init _) isOwner(caller) or (not Principal.isAnonymous(caller) and Principal.isController(caller));
 
       // ---- Open to every caller: reads without an argument worth checking,
       // and `deposit_cycles`, which anybody may use to fund the canister ----
@@ -982,12 +992,12 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   // `_owner` is whoever performed the last install or upgrade, so gating on it
   // would hand the archives to anyone who upgrades the canister.
   public query ({caller}) func getUpgradeError() : async Text {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return upgradeError;
   };
 
   public shared ({ caller }) func upgradeArchive(bOverride : Bool) : async () {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     if(bOverride == true or upgradeComplete == false){} else {
       Runtime.trap("Upgrade already complete");
     };
@@ -1016,7 +1026,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   /// and every archive reports it. One result per archive, in the order of the
   /// snapshot taken before the first `await`.
   public shared({caller}) func update_archive_controllers() : async [ArchiveControllersResult] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
 
     // Read once, before any `await`: every archive of this call gets the same
     // set even if `accept_ownership` interleaves, and an archive created
@@ -1070,14 +1080,14 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   };
 
   public shared({caller}) func set_icrc106_index_principal(principal : ?Principal) : async () {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     icrc1().set_icrc106_index_principal(principal);
   };
 
   // ======== ICRC-107: Fee Collector Management ========
 
   public shared ({ caller }) func icrc107_set_fee_collector(args : ICRC1.SetFeeCollectorArgs) : async ICRC1.SetFeeCollectorResult {
-    if(caller != owner){ return #Err(#AccessDenied("Only the owner can set the fee collector")) };
+    if(not isOwner(caller)){ return #Err(#AccessDenied("Only the owner can set the fee collector")) };
     icrc1().set_fee_collector<system>(caller, args);
   };
 
@@ -1092,7 +1102,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   };
 
   public shared ({ caller }) func mint(args : ICRC1.Mint) : async ICRC1.TransferResult {
-      if(caller != owner){ Runtime.trap("Unauthorized")};
+      if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
 
       switch( await* icrc1().mint_tokens(caller, args)){
         case(#trappable(val)) val;
@@ -1264,17 +1274,17 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   public query func get_pending_owner() : async ?Principal { pending_owner };
 
   public shared ({ caller }) func admin_update_icrc1(requests : [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return icrc1().update_ledger_info(requests);
   };
 
   public shared ({ caller }) func admin_update_icrc2(requests : [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return icrc2().update_ledger_info(requests);
   };
 
   public shared ({ caller }) func admin_update_icrc4(requests : [ICRC4.UpdateLedgerInfoRequest]) : async [Bool] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return icrc4().update_ledger_info(requests);
   };
 
@@ -1285,7 +1295,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   /// Configure the index canister for push notifications
   /// Set to null to disable notifications
   public shared ({ caller }) func admin_set_index_canister(principal : ?Principal) : async Bool {
-    if (caller != owner) { Runtime.trap("Unauthorized") };
+    if (not isOwner(caller)) { Runtime.trap("Unauthorized") };
     index_canister := principal;
     return true;
   };
@@ -1385,7 +1395,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   private var _init = false;
   public shared(msg) func admin_init() : async () {
     //can only be called once
-    if(msg.caller != owner and not Principal.isController(msg.caller)){
+    // The owner, or a controller that is not the anonymous principal: a ledger
+    // installed by the anonymous principal has it among its controllers.
+    if(not (isOwner(msg.caller) or (not Principal.isAnonymous(msg.caller) and Principal.isController(msg.caller)))){
       Runtime.trap("unauthorized");
     };
 

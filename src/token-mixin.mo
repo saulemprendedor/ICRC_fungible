@@ -94,6 +94,12 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   var owner = _owner;
   // Proposed by the owner as its successor; holds no power until it accepts.
   var pending_owner : ?Principal = null;
+
+  // The one owner predicate. `owner` starts as whoever installed the ledger, so
+  // it can be the anonymous principal; the anonymous caller is refused whatever
+  // `owner` holds.
+  func isOwner(caller : Principal) : Bool { not Principal.isAnonymous(caller) and caller == owner };
+
   var _init = false;
 
   // Index notification state
@@ -202,8 +208,8 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
       ignore c.register_supported_standards({ name = "ICRC-3"; url = "https://github.com/dfinity/ICRC/ICRCs/icrc-3/" });
       ignore c.register_supported_standards({ name = "ICRC-10"; url = "https://github.com/dfinity/ICRC/ICRCs/icrc-10/" });
     });
-    canSetFeeCollector = ?(func(caller : Principal) : Bool { caller == owner });
-    canSetIndexPrincipal = ?(func(caller : Principal) : Bool { caller == owner });
+    canSetFeeCollector = ?(func(caller : Principal) : Bool { isOwner(caller) });
+    canSetIndexPrincipal = ?(func(caller : Principal) : Bool { isOwner(caller) });
   });
 
   // ICRC2 - Approve/transfer_from
@@ -231,7 +237,7 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   // ==========================================================================
 
   public shared({caller}) func mint(a: ICRC1.Mint) : async ICRC1.TransferResult {
-    if(caller != owner) Runtime.trap("Unauthorized");
+    if(not isOwner(caller)) Runtime.trap("Unauthorized");
     switch(await* icrc1().mint_tokens(caller, a)) { case(#trappable(v) or #awaited(v)) v; case(#err(#trappable(e) or #awaited(e))) Runtime.trap(e) };
   };
 
@@ -262,9 +268,9 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   };
   public query func get_owner() : async Principal { owner };
   public query func get_pending_owner() : async ?Principal { pending_owner };
-  public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] { if(caller != owner) Runtime.trap("Unauthorized"); icrc1().update_ledger_info(r) };
-  public shared({caller}) func admin_update_icrc2(r: [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] { if(caller != owner) Runtime.trap("Unauthorized"); icrc2().update_ledger_info(r) };
-  public shared({caller}) func admin_update_icrc4(r: [ICRC4.UpdateLedgerInfoRequest]) : async [Bool] { if(caller != owner) Runtime.trap("Unauthorized"); icrc4().update_ledger_info(r) };
+  public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] { if(not isOwner(caller)) Runtime.trap("Unauthorized"); icrc1().update_ledger_info(r) };
+  public shared({caller}) func admin_update_icrc2(r: [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] { if(not isOwner(caller)) Runtime.trap("Unauthorized"); icrc2().update_ledger_info(r) };
+  public shared({caller}) func admin_update_icrc4(r: [ICRC4.UpdateLedgerInfoRequest]) : async [Bool] { if(not isOwner(caller)) Runtime.trap("Unauthorized"); icrc4().update_ledger_info(r) };
 
   // ==========================================================================
   // Index Push Notification
@@ -316,7 +322,7 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
 
   /// Configure the index canister for push notifications (null to disable)
   public shared({caller}) func admin_set_index_canister(principal: ?Principal) : async Bool {
-    if(caller != owner) Runtime.trap("Unauthorized");
+    if(not isOwner(caller)) Runtime.trap("Unauthorized");
     index_canister := principal;
     true;
   };
@@ -324,7 +330,10 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   /// Get the currently configured index canister
   public query func get_index_canister() : async ?Principal { index_canister };
 
-  public shared({caller = _caller}) func admin_init() : async () {
+  // The owner, or a controller that is not the anonymous principal, as in
+  // Token.mo. It only sets `_init` today, but an admin method is not left open.
+  public shared({caller}) func admin_init() : async () {
+    if(not (isOwner(caller) or (not Principal.isAnonymous(caller) and Principal.isController(caller)))) Runtime.trap("Unauthorized");
     _init := true;
   };
 
