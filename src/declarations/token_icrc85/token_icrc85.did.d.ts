@@ -166,7 +166,8 @@ export interface Tip {
   'last_block_hash' : Uint8Array | number[],
 }
 export interface TokenWithICRC85 {
-  'admin_update_owner' : ActorMethod<[Principal], boolean>,
+  'accept_ownership' : ActorMethod<[], undefined>,
+  'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
   'burn' : ActorMethod<[BurnArgs], TransferResult>,
   'calculate_cycles_to_share' : ActorMethod<[], [bigint, bigint]>,
   'deposit_cycles' : ActorMethod<[], undefined>,
@@ -179,6 +180,7 @@ export interface TokenWithICRC85 {
     }
   >,
   'get_owner' : ActorMethod<[], Principal>,
+  'get_pending_owner' : ActorMethod<[], [] | [Principal]>,
   'get_tip' : ActorMethod<[], Tip>,
   'icrc1_balance_of' : ActorMethod<[Account], Balance>,
   'icrc1_decimals' : ActorMethod<[], number>,

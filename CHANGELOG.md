@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without checking `max_supply`: the other mint paths go through `validate_request`, this one does
   not. It needs an approval given by the minting account, so it is closed when the minting account
   is the ledger itself. Not fixed here (upstream package).
+- The allowlist examples add `_owner` to the allowlist in the actor body
+  (`src/examples/Allowlist.mo:568`, `src/examples/AllowlistInterface.mo:184`:
+  `Set.add(allowlist, Principal.compare, _owner)`). The actor body runs again on an upgrade, where
+  `_owner` is whoever upgrades, so every principal that upgrades the canister is added to the
+  allowlist and stays there until the owner removes it with `admin_update_allowlist`. It was
+  there before the two-step hand-off and is not fixed here. Read from the code, not measured by a
+  test: the examples have no query that lists the allowlist.
 
 ### Changed
 
@@ -119,6 +126,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the ownership cannot be moved by a call: a controller has to fix it with a reinstall. Read
   `get_owner` before relying on this release.
 
+### Examples moved to the two-step hand-off
+
+- `src/snstest.mo`, `src/examples/Lotto.mo`, `src/examples/Allowlist.mo`,
+  `src/examples/LottoInterface.mo`, `src/examples/AllowlistInterface.mo` and the test fixture
+  `pic/TokenWithICRC85.mo` now carry `admin_propose_owner(?Principal)`, `accept_ownership()`,
+  `get_owner` and `get_pending_owner`, with the rules of `src/Token.mo`. Their one-step
+  `admin_update_owner` is removed: **breaking** for a caller of that method.
+- Their owner methods go through the same `isOwner` predicate, so they refuse the anonymous
+  caller whatever `owner` holds. None of them has an ingress filter: the method bodies refuse.
+- `LottoInterface.mo` and `AllowlistInterface.mo` compared the caller with the class argument
+  `_owner` and kept no owner of their own, and their `admin_update_owner` answered `true` without
+  changing anything. They now persist `owner`, set at install.
+- New stable field `pending_owner : ?Principal` in all six, and `owner : Principal` in the two
+  `*Interface.mo` examples. Upgrading is a plain upgrade.
+- Not changed: in `Allowlist.mo` and `AllowlistInterface.mo` the allowlist is still seeded from
+  `_owner` (see Known issues), and a hand-off does not edit the allowlist. `LottoInterface.mo` has no owner method besides the
+  hand-off. None of these actors has the supply lock.
+- `pic/build-token-wasm.sh` builds the examples and `src/snstest.mo` too, for
+  `pic/examples_handoff.test.ts`.
+- The committed declarations of the fixture (`src/declarations/token_icrc85/*`) were edited for
+  these methods only.
+
 ### Removed
 
 - **`admin_update_owner`** from `src/Token.mo` and `src/token-mixin.mo`. It handed the ledger
@@ -127,9 +156,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known follow-up
 
-- `src/snstest.mo`, `src/examples/*` and the test fixture `pic/TokenWithICRC85.mo` still expose
-  the one-step `admin_update_owner`. They are separate actors and were left as they are; a
-  consumer that deploys one of them keeps the hazard described above.
 - The committed declarations (`src/declarations/token/*`, `test/devefi_patches/motoko_ledger.idl.*`)
   were edited for the methods of this change only. They already differed from what the compiler
   emits for `src/Token.mo` (`get_health` is missing, `icrc21_canister_call_consent_message` is

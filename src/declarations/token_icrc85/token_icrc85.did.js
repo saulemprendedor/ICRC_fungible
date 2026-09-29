@@ -295,7 +295,8 @@ export const idlFactory = ({ IDL }) => {
   });
   const TransferBatchResults = IDL.Vec(IDL.Opt(TransferBatchResult));
   const TokenWithICRC85 = IDL.Service({
-    'admin_update_owner' : IDL.Func([IDL.Principal], [IDL.Bool], []),
+    'accept_ownership' : IDL.Func([], [], []),
+    'admin_propose_owner' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
     'burn' : IDL.Func([BurnArgs], [TransferResult], []),
     'calculate_cycles_to_share' : IDL.Func([], [IDL.Nat, IDL.Nat], ['query']),
     'deposit_cycles' : IDL.Func([], [], []),
@@ -311,6 +312,7 @@ export const idlFactory = ({ IDL }) => {
         ['query'],
       ),
     'get_owner' : IDL.Func([], [IDL.Principal], ['query']),
+    'get_pending_owner' : IDL.Func([], [IDL.Opt(IDL.Principal)], ['query']),
     'get_tip' : IDL.Func([], [Tip], ['query']),
     'icrc1_balance_of' : IDL.Func([Account], [Balance], ['query']),
     'icrc1_decimals' : IDL.Func([], [IDL.Nat8], ['query']),
