@@ -33,6 +33,8 @@ const UNAUTHORIZED = /Unauthorized/;
 const enc = (types: IDL.Type[], values: unknown[]) => new Uint8Array(IDL.encode(types, values));
 const none = enc([], []);
 const proposal = (p: Principal | null) => enc([IDL.Opt(IDL.Principal)], [p ? [p] : []]);
+// A subset of ICRC1.UpdateLedgerInfoRequest: a variant decodes into a wider one.
+const Icrc1InfoRequest = IDL.Variant({ Name: IDL.Text });
 
 const ICRC3InitArgs = IDL.Record({
   maxActiveRecords: IDL.Nat,
@@ -117,6 +119,13 @@ class Ledger {
 
   owner = async () =>
     (IDL.decode([IDL.Principal], await this.pic.queryCall({ canisterId: this.id, method: 'get_owner', arg: none }))[0] as Principal).toText();
+
+  /** `get_owner` called as an update: through the ingress filter, where there is one. */
+  ownerByUpdate = async () =>
+    (IDL.decode([IDL.Principal], await this.send('get_owner', none, this.stranger))[0] as Principal).toText();
+
+  name = async () =>
+    IDL.decode([IDL.Text], await this.pic.queryCall({ canisterId: this.id, method: 'icrc1_name', arg: none }))[0] as string;
 
   pending = async () => {
     const reply = await this.pic.queryCall({ canisterId: this.id, method: 'get_pending_owner', arg: none });
@@ -206,6 +215,40 @@ for (const variant of VARIANTS) {
       await l.expectRefused('admin_propose_owner', proposal(l.installer), l.installer, 'the former owner proposing itself back');
       await l.expectRefused('accept_ownership', none, l.installer, 'the former owner accepting');
       await l.expectState(l.next, null, 'after the former owner tried');
+    });
+
+    it('while a proposal is pending, the owner keeps admin_update_icrc1 and the proposed principal has none of it', async () => {
+      const rename = (name: string) => enc([IDL.Vec(Icrc1InfoRequest)], [[{ Name: name }]]);
+      await l.send('admin_propose_owner', proposal(l.next), l.installer);
+      const before = await l.name();
+
+      await l.expectRefused('admin_update_icrc1', rename('by the pending principal'), l.next, 'the pending principal, before it accepts');
+      expect(await l.name(), 'after the pending principal tried').toBe(before);
+
+      const reply = await l.send('admin_update_icrc1', rename('by the owner'), l.installer);
+      expect(IDL.decode([IDL.Vec(IDL.Bool)], reply)[0]).toEqual([true]);
+      expect(await l.name(), 'after the owner renamed').toBe('by the owner');
+
+      // Past any filter: a pending principal that is a canister is trapped by the body.
+      const pendingCanister = await l.installRawCaller();
+      await l.send('admin_propose_owner', proposal(pendingCanister), l.installer);
+      await l.expectBodyTrap(
+        l.via(pendingCanister, 'admin_update_icrc1', rename('by the pending canister')), UNAUTHORIZED, 'the pending canister',
+      );
+      expect(await l.name(), 'after the pending canister tried').toBe('by the owner');
+      await l.expectState(l.installer, pendingCanister, 'the owner did not move');
+    });
+
+    it('get_owner answers the same called as an update as it does as a query', async () => {
+      const both = async (expected: Principal, why: string) => {
+        expect(await l.owner(), `query, ${why}`).toBe(expected.toText());
+        expect(await l.ownerByUpdate(), `update, ${why}`).toBe(expected.toText());
+      };
+      await both(l.installer, 'after install');
+      await l.send('admin_propose_owner', proposal(l.next), l.installer);
+      await both(l.installer, 'with a proposal pending');
+      await l.send('accept_ownership', none, l.next);
+      await both(l.next, 'after the acceptance');
     });
 
     it('refuses the anonymous principal as a proposal', async () => {
