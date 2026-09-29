@@ -194,7 +194,33 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       };
     };
 
-    var icrc1_migration_state = ICRC1.init(ICRC1.initialState(), #v0_1_0(#id),?icrc1_args, _owner);
+    /// Whether the anonymous principal signs for `account`. It signs for every
+    /// subaccount of its own, so the subaccount is not read. A transfer from
+    /// the minting account is a mint: with such an account anyone mints.
+    func isAnonymousAccount(account : ICRC1.Account) : Bool {
+      Principal.isAnonymous(account.owner)
+    };
+
+    /// Traps when the ledger would start with the anonymous principal as its
+    /// installer, which makes it the owner and proves it is a controller, or
+    /// as the owner of its minting account.
+    func refuseAnonymousInstall(installer : Principal, minting : ?ICRC1.Account) {
+      if (Principal.isAnonymous(installer)) {
+        Runtime.trap("The anonymous principal cannot install the ledger: it would be its owner, and it is a controller");
+      };
+      let ?account = minting else return;
+      if (isAnonymousAccount(account)) {
+        Runtime.trap("The anonymous principal cannot be the owner of the minting account: anyone could mint");
+      };
+    };
+
+    // The initializer of a persisted variable runs at install only. `_owner`
+    // is whoever sends the install OR the upgrade, and an upgrade does not
+    // apply its init args, so an upgrade must never run this check.
+    var icrc1_migration_state = do {
+      refuseAnonymousInstall(_owner, icrc1_args.minting_account);
+      ICRC1.init(ICRC1.initialState(), #v0_1_0(#id),?icrc1_args, _owner);
+    };
     var icrc2_migration_state = ICRC2.init(ICRC2.initialState(), #v0_1_0(#id),?icrc2_args, _owner);
     var icrc4_migration_state = ICRC4.init(ICRC4.initialState(), #v0_1_0(#id),?icrc4_args, _owner);
     // The initializer of a persisted variable runs at install only, so the
@@ -211,11 +237,12 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     var owner = _owner;
 
     /// The one owner predicate, for every body guard, every owner arm of
-    /// `inspect` and `argCap`. `owner` starts as whoever installed the ledger,
-    /// so it can be the anonymous principal; the anonymous caller is refused
-    /// whatever `owner` holds. That closes the owner methods only: a ledger
-    /// installed by the anonymous principal still has it as a controller and,
-    /// by default, as its minting account.
+    /// `inspect` and `argCap`. `owner` starts as whoever installed the ledger.
+    /// An install by the anonymous principal is refused, but a ledger installed
+    /// by it before that refusal keeps its anonymous `owner` through every
+    /// upgrade; the anonymous caller is refused whatever `owner` holds. That
+    /// closes the owner methods only: such a ledger still has the anonymous
+    /// principal as a controller and, by default, as its minting account.
     func isOwner(caller : Principal) : Bool {
       not Principal.isAnonymous(caller) and caller == owner
     };
@@ -243,6 +270,19 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       for (request in requests.vals()) {
         switch (request) {
           case (#MintingAccount _ or #MaxSupply _) return true;
+          case (_) {};
+        };
+      };
+      false
+    };
+
+    /// Whether a ledger-info batch sets a minting account that the anonymous
+    /// principal signs for. Pure: `inspect` and the body of
+    /// `admin_update_icrc1` share it, so they cannot drift.
+    func setsAnonymousMinter(requests : [ICRC1.UpdateLedgerInfoRequest]) : Bool {
+      for (request in requests.vals()) {
+        switch (request) {
+          case (#MintingAccount account) if (isAnonymousAccount(account)) return true;
           case (_) {};
         };
       };
@@ -950,11 +990,15 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         bounded(args.amount) and
         ICRC1Inspect.isValidMemo(args.memo, icrc1Config);
       };
-      // Once the supply is locked, a batch that touches the minting account or
-      // the maximum supply is refused whole, as the body refuses it. The batch
-      // is decoded only for the owner, and `argCap` has already bounded it.
+      // A batch that would give the minting account to the anonymous principal
+      // is refused whole, as the body refuses it. So is, once the supply is
+      // locked, a batch that touches the minting account or the maximum supply.
+      // The batch is decoded only for the owner, and `argCap` has already
+      // bounded it.
       case (#admin_update_icrc1(getArgs)) {
-        isOwner(caller) and (not supplyLocked or not touchesSupply(getArgs()));
+        if (not isOwner(caller)) return false;
+        let requests = getArgs();
+        not setsAnonymousMinter(requests) and (not supplyLocked or not touchesSupply(requests));
       };
       case (
         #admin_update_icrc2 _ or #admin_update_icrc4 _
@@ -1409,6 +1453,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     // The whole batch, before any of it is applied: a partial apply would
     // answer a vector that reads like success.
+    if(setsAnonymousMinter(requests)){
+      Runtime.trap("The anonymous principal cannot be the owner of the minting account: anyone could mint");
+    };
     if(supplyLocked and touchesSupply(requests)){
       Runtime.trap("Supply is locked: MintingAccount and MaxSupply cannot change");
     };
