@@ -328,11 +328,11 @@ export interface Tip {
 export interface Token {
   'accept_ownership' : ActorMethod<[], undefined>,
   'admin_init' : ActorMethod<[], undefined>,
+  'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
   /**
    * / Configure the index canister for push notifications
    * / Set to null to disable notifications
    */
-  'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
   'admin_set_index_canister' : ActorMethod<[[] | [Principal]], boolean>,
   'admin_update_icrc1' : ActorMethod<
     [Array<UpdateLedgerInfoRequest__2>],

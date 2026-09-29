@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In `src/Token.mo` the ingress filter admits `accept_ownership` for the pending principal
   alone, and for nobody while nothing is pending.
 
+### What the hand-off does not do
+
+- A proposal does not expire. A principal proposed long ago can accept at any later time,
+  until the owner cancels or replaces the proposal.
+- It does not move the archives that exist: the former owner stays among their controllers
+  until the new owner runs `update_archive_controllers`.
+- It does not move the minting account, which is set at install and changed with
+  `admin_update_icrc1`.
+- It does not repair a ledger whose owner is ALREADY the anonymous principal, which the
+  one-step method allowed. There, every other owner method still answers the anonymous caller,
+  and `admin_propose_owner` refuses it, so the ownership cannot be moved by a call: a controller
+  has to fix it with an upgrade. Read `get_owner` before relying on this release.
+
 ### Removed
 
 - **`admin_update_owner`** from `src/Token.mo` and `src/token-mixin.mo`. It handed the ledger

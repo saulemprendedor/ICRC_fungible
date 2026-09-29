@@ -206,9 +206,9 @@ type Token =
  service {
    accept_ownership: () -> ();
    admin_init: () -> ();
+   admin_propose_owner: (proposed: opt principal) -> ();
    /// Configure the index canister for push notifications
    /// Set to null to disable notifications
-   admin_propose_owner: (proposed: opt principal) -> ();
    admin_set_index_canister: ("principal": opt principal) -> (bool);
    admin_update_icrc1: (requests: vec UpdateLedgerInfoRequest__2) ->
     (vec bool);
