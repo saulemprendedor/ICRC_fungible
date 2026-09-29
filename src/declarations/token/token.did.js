@@ -544,6 +544,7 @@ export const idlFactory = ({ IDL }) => {
   const Token = IDL.Service({
     'accept_ownership' : IDL.Func([], [], []),
     'admin_init' : IDL.Func([], [], []),
+    'admin_lock_supply' : IDL.Func([], [], []),
     'admin_propose_owner' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
     'admin_set_index_canister' : IDL.Func(
         [IDL.Opt(IDL.Principal)],
@@ -692,6 +693,7 @@ export const idlFactory = ({ IDL }) => {
         [],
       ),
     'is_ledger_ready' : IDL.Func([], [IDL.Bool], ['query']),
+    'is_supply_locked' : IDL.Func([], [IDL.Bool], ['query']),
     'mint' : IDL.Func([Mint], [TransferResult], []),
     'set_icrc106_index_principal' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
     'update_archive_controllers' : IDL.Func(

@@ -328,6 +328,7 @@ export interface Tip {
 export interface Token {
   'accept_ownership' : ActorMethod<[], undefined>,
   'admin_init' : ActorMethod<[], undefined>,
+  'admin_lock_supply' : ActorMethod<[], undefined>,
   'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
   /**
    * / Configure the index canister for push notifications
@@ -430,6 +431,7 @@ export interface Token {
    * / SNS parity: returns true once the ledger is initialized and ready.
    */
   'is_ledger_ready' : ActorMethod<[], boolean>,
+  'is_supply_locked' : ActorMethod<[], boolean>,
   'mint' : ActorMethod<[Mint], TransferResult>,
   'set_icrc106_index_principal' : ActorMethod<[[] | [Principal]], undefined>,
   'update_archive_controllers' : ActorMethod<

@@ -30,6 +30,8 @@ ALL=(
   # The ledger BEFORE the two-step owner hand-off, for the upgrade test of
   # pic/owner_handoff.test.ts. Built the same way, from its own commit.
   "token_one_step:@baseline bb166f8 token_one_step"
+  "token_pre_lock:@baseline f3d042e token_pre_lock"
+  "token_mixin_pre_lock:@baseline f3d042e token_mixin_pre_lock src/token-mixin.mo"
 )
 
 MOC="$(mops toolchain bin moc)"

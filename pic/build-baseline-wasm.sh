@@ -6,14 +6,16 @@
 #                   archives, that shared cycles (pic/icrc85_off.test.ts)
 #   token_one_step  (bb166f8) BEFORE the two-step owner hand-off
 #                   (pic/owner_handoff.test.ts)
+#   token_pre_lock, token_mixin_pre_lock  (f3d042e) BEFORE the supply lock
+#                   (pic/supply_lock.test.ts)
 #
 # It checks out the ref into a throwaway git worktree, resolves that tree's
-# own dependencies, compiles its src/Token.mo with the same flags as
+# own dependencies, compiles its src/Token.mo (or [main]) with the same flags as
 # build-token-wasm.sh, and writes
 #   .dfx/local/canisters/<name>/<name>.wasm.gz
 # The throwaway worktree is removed on exit.
 #
-# Usage: bash pic/build-baseline-wasm.sh [ref] [name]
+# Usage: bash pic/build-baseline-wasm.sh [ref] [name] [main]
 #        (defaults: BASELINE_REF below, token_baseline)
 # pic/build-token-wasm.sh runs it for its `token_baseline` and `token_one_step`
 # targets.
@@ -22,6 +24,7 @@ set -euo pipefail
 # The library's main before the ICRC-85 switches landed.
 BASELINE_REF="${1:-5fb6104}"
 NAME="${2:-token_baseline}"
+MAIN="${3:-src/Token.mo}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -45,7 +48,7 @@ git worktree add --detach "$TMP/src" "$BASELINE_REF" >/dev/null
   SOURCES="$(mops sources | tr '\n' ' ')"
   echo "baseline $BASELINE_REF ($(git rev-parse --short HEAD)), moc $("$MOC" --version)"
   # shellcheck disable=SC2086
-  "$MOC" $SOURCES -v --incremental-gc -o "$TMP/$NAME.wasm" src/Token.mo >/dev/null
+  "$MOC" $SOURCES -v --incremental-gc -o "$TMP/$NAME.wasm" "$MAIN" >/dev/null
 )
 
 out_dir=".dfx/local/canisters/$NAME"

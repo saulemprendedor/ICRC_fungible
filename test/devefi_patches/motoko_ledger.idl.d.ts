@@ -272,6 +272,7 @@ export interface Token {
     Array<boolean>
   >,
   'admin_propose_owner' : ActorMethod<[[] | [Principal]], undefined>,
+  'admin_lock_supply' : ActorMethod<[], undefined>,
   'archives' : ActorMethod<[], Array<LegacyArchiveInfo>>,
   'burn' : ActorMethod<[BurnArgs], TransferResult>,
   'deposit_cycles' : ActorMethod<[], undefined>,
@@ -322,6 +323,7 @@ export interface Token {
     [TransferBatchArgs],
     TransferBatchResults
   >,
+  'is_supply_locked' : ActorMethod<[], boolean>,
   'mint' : ActorMethod<[Mint], TransferResult>,
   'set_icrc106_index_principal' : ActorMethod<[[] | [Principal]], undefined>,
   'update_archive_controllers' : ActorMethod<

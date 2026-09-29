@@ -30,6 +30,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
   a change for an authenticated stranger calling it (it only marks the ledger initialised).
 
+### Added
+
+- **A one-way supply lock** (`src/Token.mo`, `src/token-mixin.mo`). `admin_lock_supply()`, by the
+  owner and never by the anonymous principal, sets a flag that no method clears. A second call
+  changes nothing. From then on:
+  - `mint` traps for every caller, the owner included (`"Supply is locked: mint is disabled"`).
+  - `admin_update_icrc1` traps, and applies **nothing**, when its batch carries any
+    `MintingAccount` or `MaxSupply` request, whatever its value (lowering the cap and re-setting
+    the current minting account included). The whole batch is refused because a partial apply
+    would answer a vector of `Bool`s that reads like success. Every other setting (name, symbol,
+    logo, fee, metadata, memo bound, fee collector and the rest) stays editable.
+- New query `is_supply_locked()`, open to anyone.
+- `inspect` in `Token.mo` mirrors the lock, as a cycles optimisation: a mint, or a batch that
+  touches either setting, is refused at ingress once locked; `admin_lock_supply` is admitted for
+  the owner only. The mixin has no ingress filter; its method bodies refuse.
+- New stable field `supplyLocked : Bool`, initialised to `false`. Upgrading is a plain upgrade and
+  the ledger starts unlocked. Going BACK to a release without the field is refused by the Motoko
+  runtime (enhanced orthogonal persistence traps in `post_upgrade` when a stable field disappears):
+  measured on a local replica, the ledger stays on the new wasm and stays locked.
+
+### What the supply lock does not do
+
+- **It is irreversible in this code only.** A controller can upgrade the canister to a wasm that
+  keeps the field and ignores it (or clears it), or reinstall it, and the lock is gone. It is as
+  strong as the keys of the canister's controllers.
+- **It freezes what can be minted, not how it is displayed.** `Decimals` and `Metadata` stay
+  editable: a change of decimals redenominates every balance in wallets and explorers, and a
+  metadata key can claim any figure. Neither moves a balance.
+- **It does not close the ICRC transfer paths.** If the minting account is an account somebody can
+  sign for, an `icrc1_transfer`, an `icrc2_transfer_from` (after that account's approval) or an
+  `icrc4_transfer_batch` from it is still recorded as a mint after the lock. Set the minting
+  account to the ledger's own principal before locking, so that nobody can sign for it; the lock
+  then keeps it there. The library does not check this: a deployer must.
+- `src/snstest.mo`, `src/examples/*` and the `pic/TokenWithICRC85.mo` fixture have no lock.
+
+### Known issues
+
+- `icrc2-mo` 0.2.1 credits a mint from `icrc2_transfer_from` (`from` = the minting account)
+  without checking `max_supply`: the other mint paths go through `validate_request`, this one does
+  not. It needs an approval given by the minting account, so it is closed when the minting account
+  is the ledger itself. Not fixed here (upstream package).
+
 ### Changed
 
 - **The owner of the ledger changes in two steps** (`src/Token.mo`, `src/token-mixin.mo`).
