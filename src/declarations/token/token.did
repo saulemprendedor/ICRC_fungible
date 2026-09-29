@@ -6,6 +6,14 @@ type ArchiveControllersResult =
              Ok: vec principal;
            };
  };
+type ArchiveUpgradeResult = 
+ record {
+   canister_id: principal;
+   result: variant {
+             Err: text;
+             Ok;
+           };
+ };
 type Value__2 = 
  variant {
    Array: vec Value__2;
@@ -284,7 +292,7 @@ type Token =
    mint: (args: Mint) -> (TransferResult);
    set_icrc106_index_principal: ("principal": opt principal) -> ();
    update_archive_controllers: () -> (vec ArchiveControllersResult);
-   upgradeArchive: (bOverride: bool) -> ();
+   upgradeArchive: (bOverride: bool) -> (vec ArchiveUpgradeResult);
  };
 type Tip = 
  record {

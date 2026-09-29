@@ -20,8 +20,8 @@
  * `bash pic/build-baseline-wasm.sh` (the library before the switch-off).
  * TOKEN_WASM / BASELINE_TOKEN_WASM point at other builds.
  *
- * Also here: a new archive gets the ledger's current owner as a controller
- * when it is created.
+ * Also here: a new archive gets the ledger's current owner as a controller,
+ * read in a self-message sent after the archive exists.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
@@ -29,7 +29,7 @@ import { PocketIc, PocketIcServer, SubnetStateType } from '@dfinity/pic';
 import { Principal } from '@icp-sdk/core/principal';
 import {
   NAMESPACES, advanceDays, countByStream, trace, archiveBlocks, archiveIdl, archives, countByNamespace, createIdentity,
-  installCollector, installLedger, smallArchiveArgs, transferUntil, upgradeLedger, wasmPath,
+  expectAllUpgraded, installCollector, installLedger, smallArchiveArgs, transferUntil, upgradeLedger, wasmPath,
 } from './archive_harness';
 
 const TOKEN_WASM = wasmPath('TOKEN_WASM', 'token');
@@ -147,7 +147,7 @@ describe('ICRC-85 is off', () => {
     await upgradeLedger(pic, id, TOKEN_WASM, owner, smallArchiveArgs({ perArchive: 60 }));
     ledger.setPrincipal(owner);
     trace('upgradeArchive');
-    await ledger.upgradeArchive(false);
+    expectAllUpgraded(await ledger.upgradeArchive(false), list);
     trace('upgradeArchive returned');
     for (let i = 0; i < 5; i++) await pic.tick();
     expect(await ledger.getUpgradeError()).toBe('');
@@ -167,7 +167,7 @@ describe('ICRC-85 is off', () => {
   });
 });
 
-describe('a new archive is controlled by the current owner from creation', () => {
+describe('a new archive is controlled by the owner read after it exists', () => {
   it('configured set ∪ {ledger, owner}, and the next archive follows a hand-off', async () => {
     const configured = createIdentity(7).getPrincipal();
     const next = createIdentity(8).getPrincipal();

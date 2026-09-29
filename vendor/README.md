@@ -150,8 +150,19 @@ upstream left them controlled by the ledger alone.
 
 The call stays fire-and-forget, as upstream has it.
 
-**Tests**: `pic/icrc85_off.test.ts` ("a new archive is controlled by the current
-owner from creation").
+**The IC's limit of 10 controllers.** The management canister refuses a
+canister with more than 10 controllers. The set written here is
+`archiveControllers ∪ {ledger} ∪ get_archive_controllers()`, and nothing in
+the vendor checks its size: past 10, `update_settings` is refused, the refusal
+is dropped with the rest of the fire-and-forget, and the new archive keeps the
+ledger as its only controller. A consumer bounds the set itself. `Token.mo`
+refuses, at install, an `archiveControllers` of more than 8 principals besides
+the ledger (the ledger and the owner make 10), and its
+`update_archive_controllers` reports a set past the limit for every archive
+without sending it.
+
+**Tests**: `pic/icrc85_off.test.ts` ("a new archive is controlled by the owner
+read after it exists"); the limit, `pic/archive_upgrade_results.test.ts`.
 
 ## `mops.lock` caveat (mops CLI 2.13.1)
 

@@ -1,3 +1,4 @@
+import Array "mo:core/Array";
 import Blob "mo:core/Blob";
 import Cycles "mo:core/Cycles";
 import D "mo:core/Debug";
@@ -8,6 +9,8 @@ import Iter "mo:core/Iter";
 import List "mo:core/List";
 import Nat "mo:core/Nat";
 import Principal "mo:core/Principal";
+import Result "mo:core/Result";
+import Text "mo:core/Text";
 import Time "mo:core/Time";
 
 import CertTree "mo:ic-certification/CertTree";
@@ -173,10 +176,34 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       };
     };
 
+    /// The IC refuses a canister with more controllers than this.
+    transient let IC_MAX_CONTROLLERS : Nat = 10;
+
+    /// Traps when `archiveControllers` leaves no room, within
+    /// `IC_MAX_CONTROLLERS`, for the two principals the ledger adds to every
+    /// archive: itself and the owner. The owner counts even when it is in the
+    /// list, because it can change and the list cannot.
+    func checkArchiveControllers(configured : ??[Principal]) {
+      let ?(?list) = configured else return;
+      let self = Principal.fromActor(this);
+      let distinct = Set.fromIter<Principal>(list.vals(), Principal.compare);
+      Set.remove(distinct, Principal.compare, self);
+      let n = Set.size(distinct);
+      if (n + 2 > IC_MAX_CONTROLLERS) {
+        Runtime.trap("archiveControllers has " # Nat.toText(n) # " principals besides the ledger; at most " # Nat.toText(IC_MAX_CONTROLLERS - 2) # " fit the IC limit of " # Nat.toText(IC_MAX_CONTROLLERS) # " controllers with the ledger and the owner");
+      };
+    };
+
     var icrc1_migration_state = ICRC1.init(ICRC1.initialState(), #v0_1_0(#id),?icrc1_args, _owner);
     var icrc2_migration_state = ICRC2.init(ICRC2.initialState(), #v0_1_0(#id),?icrc2_args, _owner);
     var icrc4_migration_state = ICRC4.init(ICRC4.initialState(), #v0_1_0(#id),?icrc4_args, _owner);
-    var icrc3_migration_state = ICRC3.initialState();
+    // The initializer of a persisted variable runs at install only, so the
+    // configured archive controllers are checked when they are applied and an
+    // upgrade, which does not apply its init args, is never refused for them.
+    var icrc3_migration_state = do {
+      checkArchiveControllers(icrc3_args.archiveControllers);
+      ICRC3.initialState();
+    };
     let cert_store : CertTree.Store = CertTree.newStore();
     transient let _ct = CertTree.Ops(cert_store);
 
@@ -308,8 +335,10 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   private func get_icrc3_environment() : ICRC3.Environment{
       {
         advanced = ?{
-          // Each new archive gets the current owner as a controller when it is
-          // created (when `archiveControllers` is managed). While a hand-off is
+          // Each new archive gets the current owner as a controller (when
+          // `archiveControllers` is managed). The library reads it in a
+          // self-message sent after the archive exists, so an `accept_ownership`
+          // landing in between gives the archive the new owner. While a hand-off is
           // pending that is still the owner that proposed it: the proposed
           // principal has proven nothing yet. Once it accepts, it runs
           // `update_archive_controllers` to take the archives that exist.
@@ -1037,6 +1066,17 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   var upgradeError = "";
   var upgradeComplete = false;
 
+  // Set while an `upgradeArchive` run awaits, so a second call cannot
+  // interleave its writes to `upgradeError` and `upgradeComplete`. Transient:
+  // no call survives an upgrade, and a persisted flag left set would lock the
+  // method for good.
+  transient var upgradeInFlight = false;
+
+  public type ArchiveUpgradeResult = {
+    canister_id : Principal;
+    result : { #Ok; #Err : Text };
+  };
+
   // The archive methods are gated on the mutable `owner`, never on `_owner`:
   // `_owner` is whoever performed the last install or upgrade, so gating on it
   // would hand the archives to anyone who upgrades the canister.
@@ -1045,20 +1085,47 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     return upgradeError;
   };
 
-  public shared ({ caller }) func upgradeArchive(bOverride : Bool) : async () {
+  /// Upgrades every ICRC-3 archive and reports each one, in the order of the
+  /// snapshot taken before the first `await`. The run completes only when
+  /// every archive upgraded; after a failure `upgradeArchive(false)` runs
+  /// again. `getUpgradeError` answers the failures of the last run, joined
+  /// with "; ", or "" when it had none.
+  public shared ({ caller }) func upgradeArchive(bOverride : Bool) : async [ArchiveUpgradeResult] {
     if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     if(bOverride == true or upgradeComplete == false){} else {
       Runtime.trap("Upgrade already complete");
     };
-    try{ 
-      // An archive created before the archive kill switch existed takes it here.
-      let _result = await UpgradeArchive.upgradeArchiveWith(Iter.toArray<Principal>(Map.keys(icrc3().get_state().archives)), { icrc85KillSwitch = ?true });
-      upgradeComplete := true;
-    } catch(e){
-      upgradeError := Error.message(e);
-    };
+    if(upgradeInFlight){ Runtime.trap("Upgrade already in progress")};
+    upgradeInFlight := true;
+    upgradeError := "";
 
-    
+    let archives = Iter.toArray<Principal>(Map.keys(icrc3().get_state().archives));
+    try {
+      // An archive created before the archive kill switch existed takes it here.
+      let outcomes = try {
+        await UpgradeArchive.upgradeArchiveWith(archives, { icrc85KillSwitch = ?true });
+      } catch(e){
+        // Nothing is known to have upgraded.
+        Array.tabulate<Result.Result<(), Text>>(archives.size(), func(_ : Nat) : Result.Result<(), Text> { #err(Error.message(e)) });
+      };
+
+      let results = Array.tabulate<ArchiveUpgradeResult>(archives.size(), func(i : Nat) : ArchiveUpgradeResult {
+        let result = if (i < outcomes.size()) outcomes[i] else #err("no result for archive " # Principal.toText(archives[i]));
+        { canister_id = archives[i]; result = switch(result){ case(#ok) #Ok; case(#err(e)) #Err(e) } };
+      });
+      let errors = List.empty<Text>();
+      for (r in results.vals()){
+        switch(r.result){ case(#Err(e)) List.add(errors, e); case(#Ok) {} };
+      };
+      if (List.isEmpty(errors)) {
+        upgradeComplete := true;
+      } else {
+        upgradeError := Text.join(List.values(errors), "; ");
+      };
+      results;
+    } finally {
+      upgradeInFlight := false;
+    };
   };
 
   
@@ -1073,7 +1140,8 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
   /// REPLACES the archive's controllers, so a former owner is dropped. With
   /// `archiveControllers = null` the archives are unmanaged: nothing is sent
   /// and every archive reports it. One result per archive, in the order of the
-  /// snapshot taken before the first `await`.
+  /// snapshot taken before the first `await`. A set of more than
+  /// `IC_MAX_CONTROLLERS` is reported for every archive and not sent.
   public shared({caller}) func update_archive_controllers() : async [ArchiveControllersResult] {
     if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
 
@@ -1096,14 +1164,27 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       };
     };
 
+    // A set past the IC's limit is refused by the management canister; say
+    // why instead, and send nothing. Only a ledger installed before the
+    // install check (`checkArchiveControllers`) can get here.
+    let over_limit : ?Text = switch(final_list){
+      case(?controllers) if (controllers.size() > IC_MAX_CONTROLLERS) {
+        ?(Nat.toText(controllers.size()) # " controllers exceeds the IC limit of " # Nat.toText(IC_MAX_CONTROLLERS) # " controllers");
+      } else null;
+      case(null) null;
+    };
+
     let results = List.empty<ArchiveControllersResult>();
     let ic : ICRC3.IC = actor("aaaaa-aa");
     for (archive in archives.vals()){
-      switch(final_list){
-        case(null){
+      switch(final_list, over_limit){
+        case(null, _){
           List.add(results, { canister_id = archive; result = #Err("archive controllers are not configured") });
         };
-        case(?controllers){
+        case(?_, ?reason){
+          List.add(results, { canister_id = archive; result = #Err(reason) });
+        };
+        case(?controllers, null){
           try {
             await ic.update_settings(({canister_id = archive; settings = {
                       controllers = ?controllers;

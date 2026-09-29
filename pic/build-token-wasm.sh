@@ -23,6 +23,11 @@ ALL=(
   "dummy_collector:pic/DummyCollector.mo"
   "raw_caller:pic/RawCaller.mo"
   "interleave_caller:pic/InterleaveCaller.mo"
+  # Not in dfx.json: fixtures of pic/archive_upgrade_results.test.ts, the
+  # release-in-`finally` pattern of `upgradeArchive` with a callback that
+  # traps, and a caller that sends `upgradeArchive` twice at once.
+  "finally_probe:pic/FinallyProbe.mo"
+  "twice_caller:pic/TwiceCaller.mo"
   # Not in dfx.json: the ledger BEFORE ICRC-85 was switched off, built from git
   # history by pic/build-baseline-wasm.sh (the positive controls and upgrade
   # tests of pic/icrc85_off.test.ts need it).
@@ -32,6 +37,9 @@ ALL=(
   "token_one_step:@baseline bb166f8 token_one_step"
   "token_pre_lock:@baseline f3d042e token_pre_lock"
   "token_mixin_pre_lock:@baseline f3d042e token_mixin_pre_lock src/token-mixin.mo"
+  # The ledger BEFORE it checked the archive controller limit at install, so a
+  # test can hold a ledger past the limit (pic/archive_upgrade_results.test.ts).
+  "token_pre_limit:@baseline f3d042e token_pre_limit"
 )
 
 MOC="$(mops toolchain bin moc)"
