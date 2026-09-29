@@ -252,11 +252,23 @@ describe('archive administration, archiveControllers = ?(?[configured])', () => 
     expect(() => IDL.decode([], new Uint8Array(IDL.encode([IDL.Vec(ArchiveControllersResult)], [results])))).not.toThrow();
   });
 
-  it('the owner reads the upgrade error and runs upgradeArchive', async () => {
-    await expect(l.send('getUpgradeError', none, l.installer)).resolves.toBeDefined();
+  // What `getUpgradeError` answers is not pinned here, only who gets an answer:
+  // an implementation that answers everybody, whatever it answers, fails.
+  it('the owner runs upgradeArchive and reads the upgrade error, and nobody else reads it', async () => {
     await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.installer)).resolves.toBeDefined();
-    const error = IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0];
-    expect(error).toBe('');
+    expect(typeof IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0]).toBe('string');
+    const read = await l.pic.queryCall({ canisterId: l.id, method: 'getUpgradeError', arg: none, sender: l.installer });
+    expect(typeof IDL.decode([IDL.Text], read)[0]).toBe('string');
+
+    for (const sender of [l.alice, l.controller, Principal.anonymous()]) {
+      // As an update, the filter refuses it.
+      await expect(l.send('getUpgradeError', none, sender), sender.toText()).rejects.toThrow(REFUSED);
+      // As a query, no filter runs: the body refuses it.
+      const failure = await l.pic.queryCall({ canisterId: l.id, method: 'getUpgradeError', arg: none, sender })
+        .then(() => null, (e: Error) => e);
+      expect(failure, sender.toText()).not.toBeNull();
+      expect(failure!.message, sender.toText()).toMatch(/Unauthorized/);
+    }
   });
 
   it('an upgrade by another controller grants it nothing and leaves the archives alone', async () => {
@@ -312,6 +324,9 @@ describe('archive administration, archiveControllers = ?(?[configured])', () => 
     await expect(l.send('update_archive_controllers', none, l.newOwner)).rejects.toThrow(REFUSED);
     await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.newOwner)).rejects.toThrow(REFUSED);
     await expect(l.send('getUpgradeError', none, l.newOwner)).rejects.toThrow(REFUSED);
+    // The owner keeps all of them while the proposal is pending.
+    await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.installer)).resolves.toBeDefined();
+    expect(typeof IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0]).toBe('string');
     for (const r of await l.updateArchiveControllers(l.installer)) {
       expect(await l.controllersOf(r.canister_id)).toEqual(expected(l.installer));
     }
@@ -338,10 +353,16 @@ describe('archive administration: the body decides past the filter', () => {
     const rawId = await l.installRawCaller();
     // A pending principal is trapped by the body too, past the filter.
     await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[rawId]]), l.installer);
-    const early = await l.via(rawId, 'update_archive_controllers', none).then(() => null, (e: Error) => e);
-    expect(early).not.toBeNull();
-    expect(early!.message).not.toMatch(REFUSED);
-    expect(early!.message).toMatch(/Unauthorized/);
+    for (const [method, arg] of [
+      ['update_archive_controllers', none],
+      ['upgradeArchive', enc([IDL.Bool], [true])],
+      ['getUpgradeError', none],
+    ] as const) {
+      const early = await l.via(rawId, method, arg).then(() => null, (e: Error) => e);
+      expect(early, method).not.toBeNull();
+      expect(early!.message, method).not.toMatch(REFUSED);
+      expect(early!.message, method).toMatch(/Unauthorized/);
+    }
     await l.via(rawId, 'accept_ownership', none);
 
     // As the owner, the caller canister gets through, with no archive yet.
