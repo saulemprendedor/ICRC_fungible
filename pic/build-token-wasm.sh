@@ -28,6 +28,12 @@ ALL=(
   # traps, and a caller that sends `upgradeArchive` twice at once.
   "finally_probe:pic/FinallyProbe.mo"
   "twice_caller:pic/TwiceCaller.mo"
+  # The examples and the SNS variant, for pic/examples_handoff.test.ts.
+  "allowlist:src/examples/Allowlist.mo"
+  "lotto:src/examples/Lotto.mo"
+  "lotto_interface:src/examples/LottoInterface.mo"
+  "allowlist_interface:src/examples/AllowlistInterface.mo"
+  "sns:src/snstest.mo"
   # Not in dfx.json: the ledger BEFORE ICRC-85 was switched off, built from git
   # history by pic/build-baseline-wasm.sh (the positive controls and upgrade
   # tests of pic/icrc85_off.test.ts need it).
