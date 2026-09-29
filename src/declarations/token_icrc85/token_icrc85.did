@@ -132,7 +132,8 @@ type Transaction =
  };
 type TokenWithICRC85 = 
  service {
-   admin_update_owner: (new_owner: principal) -> (bool);
+   accept_ownership: () -> ();
+   admin_propose_owner: (proposed: opt principal) -> ();
    burn: (args: BurnArgs) -> (TransferResult);
    calculate_cycles_to_share: () -> (nat, nat) query;
    deposit_cycles: () -> ();
@@ -143,6 +144,7 @@ type TokenWithICRC85 =
        nextCycleActionId: opt nat;
      }) query;
    get_owner: () -> (principal) query;
+   get_pending_owner: () -> (opt principal) query;
    get_tip: () -> (Tip) query;
    icrc1_balance_of: (account: Account) -> (Balance) query;
    icrc1_decimals: () -> (nat8) query;

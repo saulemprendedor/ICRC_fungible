@@ -44,6 +44,20 @@ shared ({ caller = _owner }) persistent actor class Token (args: ?{
 
     transient let org_icdevs_class_plus_manager = ClassPlus.ClassPlusInitializationManager(_owner, Principal.fromActor(this), true);
 
+    // Set once, at install: on an upgrade `_owner` is whoever upgrades, and
+    // this initializer does not run again.
+    var owner = _owner;
+
+    // The anonymous caller is refused whatever `owner` holds: `owner` starts as
+    // whoever installed the canister, and that can be the anonymous principal.
+    func isOwner(caller : Principal) : Bool {
+      not Principal.isAnonymous(caller) and caller == owner
+    };
+
+    // The principal the owner proposed as its successor. It holds no power:
+    // `owner` changes only when this principal calls `accept_ownership`.
+    var pending_owner : ?Principal = null;
+
 
 
     // ===================================
@@ -256,7 +270,7 @@ shared ({ caller = _owner }) persistent actor class Token (args: ?{
     // ===================================
 
     public shared ({ caller }) func admin_update_allowlist(request : [{principal: Principal; allow: Bool}]) : async () {
-        if(caller != _owner){ Runtime.trap("Unauthorized")};
+        if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
         for(thisItem in request.vals()){
           if(thisItem.allow){
             Set.add(allowlist, Principal.compare, thisItem.principal);
@@ -268,7 +282,7 @@ shared ({ caller = _owner }) persistent actor class Token (args: ?{
 
     // Public method to expose mint explicitly if needed, or rely on icrc1_transfer from owner?
     public shared ({ caller }) func mint(args : ICRC1.Mint) : async ICRC1.TransferResult {
-      if(caller != _owner){ Runtime.trap("Unauthorized")};
+      if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
       switch( await* icrc1().mint_tokens(caller, args)){
         case(#trappable(val)) val;
         case(#awaited(val)) val;
@@ -308,9 +322,33 @@ shared ({ caller = _owner }) persistent actor class Token (args: ?{
       _init := true;
     };
     
-    // Boilerplate
-    public shared ({ caller }) func admin_update_owner(new_owner : Principal) : async Bool {
-       if(caller != _owner){ Runtime.trap("Unauthorized")};
-       return true;
+    /// The owner changes in two steps, so that a mistyped principal, or one
+    /// nobody holds the key of, can never take the administration with it:
+    /// nothing moves until the proposed principal proves it can act.
+    ///
+    /// Step 1, by the owner. `?p` proposes `p` and replaces any earlier
+    /// proposal; `null` cancels. The proposal grants `p` nothing.
+    public shared ({ caller }) func admin_propose_owner(proposed : ?Principal) : async () {
+      if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
+      switch(proposed){
+        case(?p){
+          if(Principal.isAnonymous(p)){ Runtime.trap("The anonymous principal cannot be the owner")};
+          if(p == owner){ Runtime.trap("That principal is already the owner")};
+        };
+        case(null){};
+      };
+      pending_owner := proposed;
     };
+
+    /// Step 2, by the proposed principal, and by nobody else.
+    public shared ({ caller }) func accept_ownership() : async () {
+      if(Principal.isAnonymous(caller)){ Runtime.trap("Unauthorized")};
+      if(?caller != pending_owner){ Runtime.trap("Unauthorized")};
+      owner := caller;
+      pending_owner := null;
+    };
+
+    public query func get_owner() : async Principal { owner };
+
+    public query func get_pending_owner() : async ?Principal { pending_owner };
 };

@@ -314,6 +314,16 @@ shared ({ caller = _owner }) persistent actor class Token  (args: SNSTypes.SNSLe
 
     var owner = _owner;
 
+    // The anonymous caller is refused whatever `owner` holds: `owner` starts as
+    // whoever installed the canister, and that can be the anonymous principal.
+    func isOwner(caller : Principal) : Bool {
+      not Principal.isAnonymous(caller) and caller == owner
+    };
+
+    // The principal the owner proposed as its successor. It holds no power:
+    // `owner` changes only when this principal calls `accept_ownership`.
+    var pending_owner : ?Principal = null;
+
     var icrc3_migration_state_new = icrc3_migration_state;
 
     // ======== ICRC-3 Definition (must come before ICRC-1 since ICRC-1 depends on icrc3().add_record) ========
@@ -544,12 +554,12 @@ shared ({ caller = _owner }) persistent actor class Token  (args: SNSTypes.SNSLe
   var upgradeComplete = false;
 
   public query ({caller}) func getUpgradeError() : async Text {
-    if(caller != _owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return upgradeError;
   };
 
   public shared ({ caller }) func upgradeArchive(bOverride : Bool) : async () {
-    if(caller != _owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     if(bOverride == true or upgradeComplete == false){} else {
       Runtime.trap("Upgrade already complete");
     };
@@ -570,14 +580,14 @@ shared ({ caller = _owner }) persistent actor class Token  (args: SNSTypes.SNSLe
   };
 
   public shared({caller}) func set_icrc106_index_principal(principal : ?Principal) : async () {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     icrc1().set_icrc106_index_principal(principal);
   };
 
   // ======== ICRC-107: Fee Collector Management ========
 
   public shared ({ caller }) func icrc107_set_fee_collector(args : ICRC1.SetFeeCollectorArgs) : async ICRC1.SetFeeCollectorResult {
-    if(caller != owner){ return #Err(#AccessDenied("Only the owner can set the fee collector")) };
+    if(not isOwner(caller)){ return #Err(#AccessDenied("Only the owner can set the fee collector")) };
     icrc1().set_fee_collector<system>(caller, args);
   };
 
@@ -592,7 +602,7 @@ shared ({ caller = _owner }) persistent actor class Token  (args: SNSTypes.SNSLe
   };
 
   public shared ({ caller }) func mint(args : ICRC1.Mint) : async ICRC1.TransferResult {
-      if(caller != owner){ Runtime.trap("Unauthorized")};
+      if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
 
       switch( await* icrc1().mint_tokens(caller, args)){
         case(#trappable(val)) val;
@@ -702,24 +712,48 @@ shared ({ caller = _owner }) persistent actor class Token  (args: SNSTypes.SNSLe
       ?icrc4().get_state().ledger_info.max_balances;
   };
 
-  public shared ({ caller }) func admin_update_owner(new_owner : Principal) : async Bool {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
-    owner := new_owner;
-    return true;
+  /// The owner changes in two steps, so that a mistyped principal, or one
+  /// nobody holds the key of, can never take the administration with it:
+  /// nothing moves until the proposed principal proves it can act.
+  ///
+  /// Step 1, by the owner. `?p` proposes `p` and replaces any earlier
+  /// proposal; `null` cancels. The proposal grants `p` nothing.
+  public shared ({ caller }) func admin_propose_owner(proposed : ?Principal) : async () {
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
+    switch(proposed){
+      case(?p){
+        if(Principal.isAnonymous(p)){ Runtime.trap("The anonymous principal cannot be the owner")};
+        if(p == owner){ Runtime.trap("That principal is already the owner")};
+      };
+      case(null){};
+    };
+    pending_owner := proposed;
   };
 
+  /// Step 2, by the proposed principal, and by nobody else.
+  public shared ({ caller }) func accept_ownership() : async () {
+    if(Principal.isAnonymous(caller)){ Runtime.trap("Unauthorized")};
+    if(?caller != pending_owner){ Runtime.trap("Unauthorized")};
+    owner := caller;
+    pending_owner := null;
+  };
+
+  public query func get_owner() : async Principal { owner };
+
+  public query func get_pending_owner() : async ?Principal { pending_owner };
+
   public shared ({ caller }) func admin_update_icrc1(requests : [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return icrc1().update_ledger_info(requests);
   };
 
   public shared ({ caller }) func admin_update_icrc2(requests : [ICRC2.UpdateLedgerInfoRequest]) : async [Bool] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return icrc2().update_ledger_info(requests);
   };
 
   public shared ({ caller }) func admin_update_icrc4(requests : [ICRC4.UpdateLedgerInfoRequest]) : async [Bool] {
-    if(caller != owner){ Runtime.trap("Unauthorized")};
+    if(not isOwner(caller)){ Runtime.trap("Unauthorized")};
     return icrc4().update_ledger_info(requests);
   };
 
