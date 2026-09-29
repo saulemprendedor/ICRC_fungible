@@ -18,11 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `icrc107_set_fee_collector` (still `#Err(#AccessDenied)`), `upgradeArchive`,
   `update_archive_controllers` and `getUpgradeError`. Nothing changes for a caller that is not
   anonymous.
+- A new archive never gets an anonymous owner as a controller (`src/Token.mo`): the archive hook
+  contributes nothing when `owner` is the anonymous principal. Before, every archive such a ledger
+  created could be administered by anyone through the management canister.
 - **This does not make a ledger installed by the anonymous principal safe.** Such a ledger still
-  has the anonymous principal as a controller (anyone can reinstall or delete it), as its default
-  minting account (anyone can mint with `icrc1_transfer` or `icrc4_transfer_batch` from it), and
-  as a controller of every archive it creates. Install with an authenticated identity and read
-  `get_owner` and `icrc1_minting_account` before relying on a ledger.
+  has the anonymous principal as a controller (anyone can reinstall or delete it) and as its
+  default minting account (anyone can mint with `icrc1_transfer` or `icrc4_transfer_batch` from
+  it). Install with an authenticated identity and read `get_owner` and `icrc1_minting_account`
+  before relying on a ledger.
 - `admin_init` admits the owner or a controller that is not the anonymous principal. In
   `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
   a change for an authenticated stranger calling it (it only marks the ledger initialised).
