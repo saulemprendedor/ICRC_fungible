@@ -97,6 +97,8 @@ interface Variant {
   wasm: string;
   /** The same actor built from the release before the lock. */
   preLockWasm: string;
+  /** The same actor before it refused the anonymous principal at install. */
+  preRefusalWasm: string;
   /** Whether the actor has an ingress filter. */
   filtered: boolean;
   installArg: Uint8Array;
@@ -108,6 +110,7 @@ const VARIANTS: Variant[] = [
     name: 'Token.mo',
     wasm: wasmPath('TOKEN_WASM', 'token'),
     preLockWasm: wasmPath('TOKEN_PRE_LOCK_WASM', 'token_pre_lock'),
+    preRefusalWasm: wasmPath('TOKEN_PRE_REFUSAL_WASM', 'token_pre_refusal'),
     filtered: true,
     installArg: enc([IDL.Opt(IDL.Record({ ...sections, icrc3: IDL.Opt(ICRC3InitArgs) }))], [[]]),
   },
@@ -115,6 +118,7 @@ const VARIANTS: Variant[] = [
     name: 'token-mixin.mo',
     wasm: wasmPath('TOKEN_MIXIN_WASM', 'token-mixin'),
     preLockWasm: wasmPath('TOKEN_MIXIN_PRE_LOCK_WASM', 'token_mixin_pre_lock'),
+    preRefusalWasm: wasmPath('TOKEN_MIXIN_PRE_REFUSAL_WASM', 'token_mixin_pre_refusal'),
     filtered: false,
     // The mixin's `icrc3` section is not optional.
     installArg: enc(
@@ -207,12 +211,12 @@ class Ledger {
     expect(await this.snapshot(), why).toEqual(before);
   }
 
-  upgradeTo = async (wasm: string) => {
+  upgradeTo = async (wasm: string, sender: Principal = this.installer) => {
     await this.pic.upgradeCanister({
       canisterId: this.id,
       wasm: readFileSync(wasm),
       arg: this.variant.installArg,
-      sender: this.installer,
+      sender,
       upgradeModeOptions: { wasm_memory_persistence: [{ keep: null }], skip_pre_upgrade: [] },
     });
     await this.pic.tick(3);
@@ -393,10 +397,16 @@ for (const variant of VARIANTS) {
 
   describe(`supply lock: the anonymous owner, ${variant.name}`, () => {
     let l: Ledger;
-    beforeEach(async () => { l = await Ledger.create(variant, { installer: Principal.anonymous() }); }, 120_000);
+    // The current build refuses to be installed by the anonymous principal, so
+    // the ledger is the build from before that refusal, upgraded in place by an
+    // authenticated controller. `owner` is persisted: the upgrade keeps it.
+    beforeEach(async () => {
+      l = await Ledger.create(variant, { wasm: variant.preRefusalWasm, installer: Principal.anonymous() });
+      await l.upgradeTo(variant.wasm, l.controller);
+    }, 120_000);
     afterEach(async () => { await l.tearDown(); });
 
-    it('a ledger installed by the anonymous principal cannot be locked by it', async () => {
+    it('a ledger whose owner is the anonymous principal cannot be locked by it', async () => {
       expect(await l.owner()).toBe(Principal.anonymous().toText());
       await l.expectRefused('admin_lock_supply', none, l.anonymous, UNAUTHORIZED, 'the anonymous owner');
       expect(await l.locked()).toBe(false);

@@ -2,11 +2,14 @@
  * The anonymous caller is refused by every owner-gated method, whatever
  * `owner` holds (src/Token.mo and src/token-mixin.mo).
  *
- * `owner` starts as whoever installed the ledger, so a ledger installed by the
- * anonymous principal has an anonymous `owner`. While `owner` is authenticated,
- * `caller == owner` already refuses the anonymous principal and the anonymous
- * check cannot be observed; these tests therefore install the ledger AS the
- * anonymous principal and send every owner method from it.
+ * `owner` starts as whoever installed the ledger. While `owner` is
+ * authenticated, `caller == owner` already refuses the anonymous principal and
+ * the anonymous check cannot be observed, so these tests need a ledger whose
+ * owner is anonymous. The current build refuses to be installed by the
+ * anonymous principal (pic/install_refusal.test.ts), so they install the build
+ * from BEFORE that refusal as the anonymous principal and upgrade it in place
+ * to the current build, as an authenticated controller. `owner` is persisted:
+ * the upgrade keeps it.
  *
  * Where the refusal comes from:
  *  - `Token.mo` has an ingress filter, so an anonymous update is refused by
@@ -94,6 +97,8 @@ const ICRC3_ARGS = {
 interface Variant {
   name: string;
   wasm: string;
+  /** The same actor before it refused the anonymous principal at install. */
+  preRefusalWasm: string;
   /** Whether the actor has an ingress filter. */
   filtered: boolean;
   /** Whether the actor exposes the archive administration methods. */
@@ -106,6 +111,7 @@ const VARIANTS: Variant[] = [
   {
     name: 'Token.mo',
     wasm: wasmPath('TOKEN_WASM', 'token'),
+    preRefusalWasm: wasmPath('TOKEN_PRE_REFUSAL_WASM', 'token_pre_refusal'),
     filtered: true,
     archives: true,
     installArg: enc([IDL.Opt(IDL.Record({ ...sections, icrc3: IDL.Opt(ICRC3InitArgs) }))], [[]]),
@@ -113,6 +119,7 @@ const VARIANTS: Variant[] = [
   {
     name: 'token-mixin.mo',
     wasm: wasmPath('TOKEN_MIXIN_WASM', 'token-mixin'),
+    preRefusalWasm: wasmPath('TOKEN_MIXIN_PRE_REFUSAL_WASM', 'token_mixin_pre_refusal'),
     filtered: false,
     archives: false,
     // The mixin's `icrc3` section is not optional.
@@ -136,15 +143,36 @@ class Ledger {
 
   private constructor(readonly pic: PocketIc, readonly id: Principal, readonly variant: Variant, readonly installer: Principal) {}
 
-  /** A ledger installed by `installer`, which is then its owner and one of its two controllers. */
+  /**
+   * A ledger installed by `installer`, which is then its owner and one of its
+   * two controllers. For the anonymous principal, the build from before the
+   * install refusal, upgraded in place to the current one by `controller`.
+   */
   static async create(variant: Variant, installer: Principal): Promise<Ledger> {
     const pic = await PocketIc.create(server.getUrl(), { application: [{ state: { type: SubnetStateType.New } }] });
     const controller = createIdentity(2).getPrincipal();
     const id = await pic.createCanister({ sender: installer, controllers: [installer, controller] });
     await pic.addCycles(id, 100_000_000_000_000n);
-    await pic.installCode({ canisterId: id, wasm: readFileSync(variant.wasm), arg: variant.installArg, sender: installer });
+    const wasm = installer.isAnonymous() ? variant.preRefusalWasm : variant.wasm;
+    await pic.installCode({ canisterId: id, wasm: readFileSync(wasm), arg: variant.installArg, sender: installer });
     await pic.tick(3);
-    return new Ledger(pic, id, variant, installer);
+    const l = new Ledger(pic, id, variant, installer);
+    if (installer.isAnonymous()) {
+      await pic.upgradeCanister({
+        canisterId: id,
+        wasm: readFileSync(variant.wasm),
+        arg: variant.installArg,
+        sender: controller,
+        upgradeModeOptions: { wasm_memory_persistence: [{ keep: null }], skip_pre_upgrade: [] },
+      });
+      await pic.tick(3);
+      // What every test below stands on: the upgrade kept the anonymous owner
+      // and the anonymous minting account.
+      expect((await l.state()).owner, 'the owner after the upgrade').toBe('2vxsx-fae');
+      const minter = IDL.decode([IDL.Opt(Account)], await l.query('icrc1_minting_account'))[0] as unknown as { owner: Principal }[];
+      expect(minter.map((a) => a.owner.toText()), 'the minting account after the upgrade').toEqual(['2vxsx-fae']);
+    }
+    return l;
   }
 
   tearDown = () => this.pic.tearDown();
@@ -252,7 +280,7 @@ for (const variant of VARIANTS) {
     beforeEach(async () => { l = await Ledger.create(variant, Principal.anonymous()); }, 120_000);
     afterEach(async () => { await l.tearDown(); });
 
-    it('a ledger installed by the anonymous principal has the anonymous principal as its owner', async () => {
+    it('a ledger installed by the anonymous principal before the refusal keeps it as its owner', async () => {
       expect((await l.state()).owner).toBe('2vxsx-fae');
     });
 

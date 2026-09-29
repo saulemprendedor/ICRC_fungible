@@ -16,6 +16,9 @@ import { Principal } from '@icp-sdk/core/principal';
 import { IDL } from '@icp-sdk/core/candid';
 import { resolve } from 'path';
 import { existsSync, readFileSync } from 'fs';
+import { createIdentity } from './archive_harness';
+
+const installer = createIdentity(1).getPrincipal();
 
 const TOKEN_WASM_PATH = resolve(__dirname, '../.dfx/local/canisters/token/token.wasm.gz');
 const MIXIN_WASM_PATH = resolve(__dirname, '../.dfx/local/canisters/token-mixin/token-mixin.wasm.gz');
@@ -138,6 +141,9 @@ describe('Token Timer Auto-Initialization Verification', () => {
                 idlFactory: tokenIdlFactory,
                 wasm: wasmBuffer,
                 arg: encodedArgs,
+                // Without a sender PocketIC installs as the anonymous
+                // principal, which the ledger refuses.
+                sender: installer,
             });
 
             const actor = fixture.actor as {

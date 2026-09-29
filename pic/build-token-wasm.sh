@@ -46,6 +46,12 @@ ALL=(
   # The ledger BEFORE it checked the archive controller limit at install, so a
   # test can hold a ledger past the limit (pic/archive_upgrade_results.test.ts).
   "token_pre_limit:@baseline f3d042e token_pre_limit"
+  # The ledger BEFORE it refused the anonymous principal at install: the only
+  # way left to a ledger whose owner is anonymous, which the tests of the owner
+  # guards need (pic/owner_anon_guard.test.ts, pic/supply_lock.test.ts,
+  # pic/install_refusal.test.ts).
+  "token_pre_refusal:@baseline 5ff1d78 token_pre_refusal"
+  "token_mixin_pre_refusal:@baseline 5ff1d78 token_mixin_pre_refusal src/token-mixin.mo"
 )
 
 MOC="$(mops toolchain bin moc)"
