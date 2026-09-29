@@ -91,12 +91,36 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   // ==========================================================================
   
   let cert_store : CertTree.Store = CertTree.newStore();
-  var owner = _owner;
+
+  // Whether the anonymous principal signs for `account`, whatever its subaccount.
+  func isAnonymousAccount(account : ICRC1.Account) : Bool { Principal.isAnonymous(account.owner) };
+
+  // Traps when the ledger would start with the anonymous principal as its
+  // installer: it would be its owner, and it is a controller. See `src/Token.mo`.
+  func refuseAnonymousInstaller(installer : Principal) {
+    if(Principal.isAnonymous(installer)) Runtime.trap("The anonymous principal cannot install the ledger: it would be its owner, and it is a controller");
+  };
+
+  // Traps when the minting account would be one the anonymous principal signs
+  // for: a transfer from it is a mint, so anyone could mint.
+  func refuseAnonymousMinter(minting : ?ICRC1.Account) {
+    let ?account = minting else return;
+    if(isAnonymousAccount(account)) Runtime.trap("The anonymous principal cannot be the owner of the minting account: anyone could mint");
+  };
+
+  // The initializer of a persisted variable runs at install only. `_owner` is
+  // whoever sends the install OR the upgrade, so an upgrade must never run
+  // this check. The minting account is checked below, where it is applied.
+  var owner = do {
+    refuseAnonymousInstaller(_owner);
+    _owner;
+  };
   // Proposed by the owner as its successor; holds no power until it accepts.
   var pending_owner : ?Principal = null;
 
-  // The one owner predicate. `owner` starts as whoever installed the ledger, so
-  // it can be the anonymous principal; the anonymous caller is refused whatever
+  // The one owner predicate. `owner` starts as whoever installed the ledger. A
+  // ledger installed by the anonymous principal before that install was refused
+  // keeps its anonymous `owner`; the anonymous caller is refused whatever
   // `owner` holds.
   func isOwner(caller : Principal) : Bool { not Principal.isAnonymous(caller) and caller == owner };
 
@@ -216,6 +240,16 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
     canSetIndexPrincipal = ?(func(caller : Principal) : Bool { isOwner(caller) });
   });
 
+  // The mixin applies `icrc1_args` when it first builds the ICRC-1 state: after
+  // the install or, if an upgrade comes before that, from that upgrade's args.
+  // So the minting account is checked on every start that finds the state not
+  // built yet, and never once it is built: an upgrade of a working ledger does
+  // not apply its init args, and is not refused for them.
+  switch(icrc1_migration_state) {
+    case(#v0_0_0 _) refuseAnonymousMinter(icrc1_args.minting_account);
+    case(_) {};
+  };
+
   // ICRC2 - Approve/transfer_from
   include ICRC2Mixin({
     ICRC2.defaultMixinArgs(org_icdevs_class_plus_manager) with
@@ -243,6 +277,12 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   // Any `#MintingAccount` or `#MaxSupply` in a ledger-info batch.
   func touchesSupply(r: [ICRC1.UpdateLedgerInfoRequest]) : Bool {
     for(x in r.vals()) { switch(x) { case(#MintingAccount _ or #MaxSupply _) return true; case(_) {} } };
+    false
+  };
+
+  // Any `#MintingAccount` that the anonymous principal signs for.
+  func setsAnonymousMinter(r: [ICRC1.UpdateLedgerInfoRequest]) : Bool {
+    for(x in r.vals()) { switch(x) { case(#MintingAccount a) if(isAnonymousAccount(a)) return true; case(_) {} } };
     false
   };
 
@@ -279,9 +319,11 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   };
   public query func get_owner() : async Principal { owner };
   public query func get_pending_owner() : async ?Principal { pending_owner };
-  // A batch that touches the supply is refused whole once locked, before any of it applies.
+  // A batch that gives the minting account to the anonymous principal, or that
+  // touches the supply once locked, is refused whole, before any of it applies.
   public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
     if(not isOwner(caller)) Runtime.trap("Unauthorized");
+    if(setsAnonymousMinter(r)) Runtime.trap("The anonymous principal cannot be the owner of the minting account: anyone could mint");
     if(supplyLocked and touchesSupply(r)) Runtime.trap("Supply is locked: MintingAccount and MaxSupply cannot change");
     icrc1().update_ledger_info(r)
   };

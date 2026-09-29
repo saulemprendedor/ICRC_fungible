@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The ledger refuses to be installed by the anonymous principal** (`src/Token.mo`,
+  `src/token-mixin.mo`). The installer is the first owner and the owner of the default minting
+  account, and it is a controller. An install or a reinstall sent by the anonymous principal now
+  traps (`"The anonymous principal cannot install the ledger"`) and installs nothing.
+  **Breaking** for a deployment that installs without an identity, a local one included: install
+  with an authenticated identity.
+- **The minting account cannot be owned by the anonymous principal.** A transfer from the minting
+  account is a mint, so with such an account anyone mints. An install whose init args carry one
+  traps (`"The anonymous principal cannot be the owner of the minting account"`), with or without
+  a subaccount. So does `admin_update_icrc1` when its batch carries such a `MintingAccount`: the
+  whole batch is refused and nothing of it is applied, locked or not. `inspect` in `Token.mo`
+  refuses the same batch at ingress.
+- **An upgrade of a working ledger is never refused by these checks**, whoever sends it and
+  whatever init args it carries: they run where the installer and the init args are applied, at
+  install and reinstall. One upgrade does apply its init args, and is checked for the minting
+  account: `src/token-mixin.mo` builds its ICRC-1 state on the first use after the install, so an
+  upgrade that comes before that (of a ledger installed while stopped, for example) sets the
+  minting account from its own args. No stable field is added, so upgrading is a plain upgrade.
 - **Every owner method refuses the anonymous caller** (`src/Token.mo`, `src/token-mixin.mo`),
   in its body and, in `Token.mo`, in the ingress filter, whatever `owner` holds. `owner` starts as
   whoever installed the ledger, so a ledger installed by the anonymous principal had an anonymous
@@ -21,11 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A new archive never gets an anonymous owner as a controller (`src/Token.mo`): the archive hook
   contributes nothing when `owner` is the anonymous principal. Before, every archive such a ledger
   created could be administered by anyone through the management canister.
-- **This does not make a ledger installed by the anonymous principal safe.** Such a ledger still
-  has the anonymous principal as a controller (anyone can reinstall or delete it) and as its
-  default minting account (anyone can mint with `icrc1_transfer` or `icrc4_transfer_batch` from
-  it). Install with an authenticated identity and read `get_owner` and `icrc1_minting_account`
-  before relying on a ledger.
+- **None of this repairs a ledger that the anonymous principal installed from an earlier
+  release.** Upgrading it keeps the anonymous principal as its owner, as a controller (anyone can
+  reinstall or delete it) and as its default minting account (anyone can mint with
+  `icrc1_transfer` or `icrc4_transfer_batch` from it). No method gets it out of that state: its
+  owner methods refuse the anonymous caller. The way out is for an authenticated controller to
+  remove the anonymous principal from the controllers and reinstall, which loses the state. Read
+  `get_owner` and `icrc1_minting_account` before relying on a ledger.
+- The install check covers `src/Token.mo` and `src/token-mixin.mo`. `src/snstest.mo`, the actors
+  under `src/examples/` and the test fixture `pic/TokenWithICRC85.mo` keep their own constructors
+  and do not have it.
 - `admin_init` admits the owner or a controller that is not the anonymous principal. In
   `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
   a change for an authenticated stranger calling it (it only marks the ledger initialised).
