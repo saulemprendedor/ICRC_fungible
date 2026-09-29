@@ -85,6 +85,13 @@ const GetBlocksResult = IDL.Record({
   blocks: IDL.Vec(IDL.Record({ id: IDL.Nat, block: Value })),
 });
 
+/** One entry of `upgradeArchive`'s reply. */
+export const ArchiveUpgradeResult = IDL.Record({
+  canister_id: IDL.Principal,
+  result: IDL.Variant({ Ok: IDL.Null, Err: IDL.Text }),
+});
+export type UpgradeResult = { canister_id: Principal; result: { Ok: null } | { Err: string } };
+
 export const ledgerIdl: IDL.InterfaceFactory = ({ IDL }) => IDL.Service({
   mint: IDL.Func([IDL.Record({
     to: Account,
@@ -105,7 +112,7 @@ export const ledgerIdl: IDL.InterfaceFactory = ({ IDL }) => IDL.Service({
     [IDL.Vec(IDL.Record({ canister_id: IDL.Principal, start: IDL.Nat, end: IDL.Nat }))],
     ['query'],
   ),
-  upgradeArchive: IDL.Func([IDL.Bool], [], []),
+  upgradeArchive: IDL.Func([IDL.Bool], [IDL.Vec(ArchiveUpgradeResult)], []),
   getUpgradeError: IDL.Func([], [IDL.Text], ['query']),
   admin_propose_owner: IDL.Func([IDL.Opt(IDL.Principal)], [], []),
   accept_ownership: IDL.Func([], [], []),
@@ -331,6 +338,17 @@ export async function transferUntil(
 export async function archives(ledger: Actor<any>, ledgerId: Principal): Promise<{ canister_id: Principal; start: bigint; end: bigint }[]> {
   const all: { canister_id: Principal; start: bigint; end: bigint }[] = await ledger.icrc3_get_archives({ from: [] });
   return all.filter((a) => a.canister_id.toText() !== ledgerId.toText());
+}
+
+/** `upgradeArchive`'s reply names exactly `list`, each `Ok`. */
+export function expectAllUpgraded(results: UpgradeResult[], list: { canister_id: Principal }[]): void {
+  const ids = (xs: { canister_id: Principal }[]) => xs.map((x) => x.canister_id.toText()).sort();
+  if (JSON.stringify(ids(results)) !== JSON.stringify(ids(list))) {
+    throw new Error(`upgradeArchive answered ${ids(results)} for archives ${ids(list)}`);
+  }
+  for (const r of results) {
+    if (!('Ok' in r.result)) throw new Error(`archive ${r.canister_id.toText()} did not upgrade: ${(r.result as { Err: string }).Err}`);
+  }
 }
 
 /** Blocks `[start, start + length)` read straight from an archive, as JSON for comparison. */

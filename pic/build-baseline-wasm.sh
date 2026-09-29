@@ -8,6 +8,8 @@
 #                   (pic/owner_handoff.test.ts)
 #   token_pre_lock, token_mixin_pre_lock  (f3d042e) BEFORE the supply lock
 #                   (pic/supply_lock.test.ts)
+#   token_pre_limit (f3d042e) BEFORE the archive controller limit was
+#                   checked at install (pic/archive_upgrade_results.test.ts)
 #
 # It checks out the ref into a throwaway git worktree, resolves that tree's
 # own dependencies, compiles its src/Token.mo (or [main]) with the same flags as
@@ -17,8 +19,7 @@
 #
 # Usage: bash pic/build-baseline-wasm.sh [ref] [name] [main]
 #        (defaults: BASELINE_REF below, token_baseline)
-# pic/build-token-wasm.sh runs it for its `token_baseline` and `token_one_step`
-# targets.
+# pic/build-token-wasm.sh runs it for each of those targets.
 set -euo pipefail
 
 # The library's main before the ICRC-85 switches landed.

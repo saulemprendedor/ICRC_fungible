@@ -72,6 +72,12 @@ const TokenInitArgs = IDL.Opt(IDL.Record({
 
 type Result = { canister_id: Principal; result: { Ok: Principal[] } | { Err: string } };
 
+const ArchiveUpgradeResult = IDL.Record({
+  canister_id: IDL.Principal,
+  result: IDL.Variant({ Ok: IDL.Null, Err: IDL.Text }),
+});
+type UpgradeResult = { canister_id: Principal; result: { Ok: null } | { Err: string } };
+
 // =============== Helpers ===============
 
 const REFUSED = /inspect_message|canister_inspect_message/i;
@@ -183,6 +189,12 @@ class Ledger {
     return list.map((a) => a.canister_id).filter((p) => p.toText() !== this.id.toText());
   }
 
+  /** `upgradeArchive(bOverride)` sent by `sender`, its reply decoded. */
+  async upgradeArchive(sender: Principal, bOverride = true): Promise<UpgradeResult[]> {
+    const reply = await this.send('upgradeArchive', enc([IDL.Bool], [bOverride]), sender);
+    return IDL.decode([IDL.Vec(ArchiveUpgradeResult)], reply)[0] as unknown as UpgradeResult[];
+  }
+
   async updateArchiveControllers(sender: Principal): Promise<Result[]> {
     const reply = await this.send('update_archive_controllers', none, sender);
     return IDL.decode([IDL.Vec(ArchiveControllersResult)], reply)[0] as unknown as Result[];
@@ -252,11 +264,11 @@ describe('archive administration, archiveControllers = ?(?[configured])', () => 
     expect(() => IDL.decode([], new Uint8Array(IDL.encode([IDL.Vec(ArchiveControllersResult)], [results])))).not.toThrow();
   });
 
-  // What `getUpgradeError` answers is not pinned here, only who gets an answer:
-  // an implementation that answers everybody, whatever it answers, fails.
   it('the owner runs upgradeArchive and reads the upgrade error, and nobody else reads it', async () => {
-    await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.installer)).resolves.toBeDefined();
-    expect(typeof IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0]).toBe('string');
+    const results = await l.upgradeArchive(l.installer);
+    expect(sorted(results.map((r) => r.canister_id))).toEqual(sorted(archives));
+    for (const r of results) expect(r.result, r.canister_id.toText()).toEqual({ Ok: null });
+    expect(IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0]).toBe('');
     const read = await l.pic.queryCall({ canisterId: l.id, method: 'getUpgradeError', arg: none, sender: l.installer });
     expect(typeof IDL.decode([IDL.Text], read)[0]).toBe('string');
 
@@ -325,8 +337,10 @@ describe('archive administration, archiveControllers = ?(?[configured])', () => 
     await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.newOwner)).rejects.toThrow(REFUSED);
     await expect(l.send('getUpgradeError', none, l.newOwner)).rejects.toThrow(REFUSED);
     // The owner keeps all of them while the proposal is pending.
-    await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.installer)).resolves.toBeDefined();
-    expect(typeof IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0]).toBe('string');
+    const upgraded = await l.upgradeArchive(l.installer);
+    expect(sorted(upgraded.map((r) => r.canister_id))).toEqual(sorted(archives));
+    for (const r of upgraded) expect(r.result, r.canister_id.toText()).toEqual({ Ok: null });
+    expect(IDL.decode([IDL.Text], await l.send('getUpgradeError', none, l.installer))[0]).toBe('');
     for (const r of await l.updateArchiveControllers(l.installer)) {
       expect(await l.controllersOf(r.canister_id)).toEqual(expected(l.installer));
     }

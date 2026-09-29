@@ -19,7 +19,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PocketIc, PocketIcServer, SubnetStateType } from '@dfinity/pic';
 import {
-  archiveBlocks, archiveIdl, archives, createIdentity, installLedger, smallArchiveArgs,
+  archiveBlocks, archiveIdl, archives, createIdentity, expectAllUpgraded, installLedger, smallArchiveArgs,
   transferUntil, wasmPath,
 } from './archive_harness';
 
@@ -67,7 +67,7 @@ describe('upgradeArchive keeps each archive\'s bounds', () => {
     expect(before[1].stats.first_block_index).toBeGreaterThan(0n);
 
     ledger.setPrincipal(owner);
-    await ledger.upgradeArchive(false);
+    expectAllUpgraded(await ledger.upgradeArchive(false), list);
     for (let i = 0; i < 5; i++) await pic.tick();
     expect(await ledger.getUpgradeError()).toBe('');
 
