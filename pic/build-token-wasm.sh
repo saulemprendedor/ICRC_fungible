@@ -27,6 +27,9 @@ ALL=(
   # history by pic/build-baseline-wasm.sh (the positive controls and upgrade
   # tests of pic/icrc85_off.test.ts need it).
   "token_baseline:@baseline"
+  # The ledger BEFORE the two-step owner hand-off, for the upgrade test of
+  # pic/owner_handoff.test.ts. Built the same way, from its own commit.
+  "token_one_step:@baseline bb166f8 token_one_step"
 )
 
 MOC="$(mops toolchain bin moc)"
@@ -49,8 +52,9 @@ for name in "${targets[@]}"; do
     exit 1
   fi
 
-  if [ "$main" = "@baseline" ]; then
-    bash "$ROOT/pic/build-baseline-wasm.sh"
+  if [ "${main%% *}" = "@baseline" ]; then
+    # shellcheck disable=SC2086
+    bash "$ROOT/pic/build-baseline-wasm.sh" ${main#@baseline}
     continue
   fi
 

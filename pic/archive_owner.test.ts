@@ -159,8 +159,8 @@ class Ledger {
     this.pic.updateCall({ canisterId: this.id, method, arg, sender });
 
   /** Mints until the ledger has spun off `atLeast` archives. */
-  async growArchives(atLeast: number): Promise<Principal[]> {
-    for (let i = 0; i < MINTS; i++) {
+  async growArchives(atLeast: number, mints = MINTS): Promise<Principal[]> {
+    for (let i = 0; i < mints; i++) {
       await this.send('mint', enc([MintArgs], [{
         to: { owner: this.alice, subaccount: [] }, amount: 1_000_000n + BigInt(i), memo: [], created_at_time: [],
       }]), this.installer);
@@ -208,6 +208,12 @@ class Ledger {
   }
 
   installRawCaller = () => this.installCaller(RAW_CALLER_WASM_PATH);
+
+  /** The two steps of a hand-off between identities: `from` proposes, `to` accepts. */
+  async handOff(to: Principal, from: Principal = this.installer) {
+    await this.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[to]]), from);
+    await this.send('accept_ownership', none, to);
+  }
 
   /** `method` of the ledger called by `rawId`, an inter-canister call that `inspect` never sees. */
   via = (rawId: Principal, method: string, arg: Uint8Array) =>
@@ -301,7 +307,15 @@ describe('archive administration, archiveControllers = ?(?[configured])', () => 
   });
 
   it('after a hand-off, the former owner is refused and the new owner drops it from every archive', async () => {
-    await l.send('admin_update_owner', enc([IDL.Principal], [l.newOwner]), l.installer);
+    // A proposal alone gives the proposed principal no archive method.
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    await expect(l.send('update_archive_controllers', none, l.newOwner)).rejects.toThrow(REFUSED);
+    await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.newOwner)).rejects.toThrow(REFUSED);
+    await expect(l.send('getUpgradeError', none, l.newOwner)).rejects.toThrow(REFUSED);
+    for (const r of await l.updateArchiveControllers(l.installer)) {
+      expect(await l.controllersOf(r.canister_id)).toEqual(expected(l.installer));
+    }
+    await l.send('accept_ownership', none, l.newOwner);
 
     await expect(l.send('update_archive_controllers', none, l.installer)).rejects.toThrow(REFUSED);
     await expect(l.send('upgradeArchive', enc([IDL.Bool], [true]), l.installer)).rejects.toThrow(REFUSED);
@@ -322,13 +336,20 @@ describe('archive administration: the body decides past the filter', () => {
 
   it('a caller canister that was the owner is trapped by the body after it hands off', async () => {
     const rawId = await l.installRawCaller();
-    await l.send('admin_update_owner', enc([IDL.Principal], [rawId]), l.installer);
+    // A pending principal is trapped by the body too, past the filter.
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[rawId]]), l.installer);
+    const early = await l.via(rawId, 'update_archive_controllers', none).then(() => null, (e: Error) => e);
+    expect(early).not.toBeNull();
+    expect(early!.message).not.toMatch(REFUSED);
+    expect(early!.message).toMatch(/Unauthorized/);
+    await l.via(rawId, 'accept_ownership', none);
 
     // As the owner, the caller canister gets through, with no archive yet.
     const reply = IDL.decode([IDL.Vec(IDL.Nat8)], await l.via(rawId, 'update_archive_controllers', none))[0] as Uint8Array;
     expect(IDL.decode([IDL.Vec(ArchiveControllersResult)], new Uint8Array(reply))[0]).toEqual([]);
 
-    await l.via(rawId, 'admin_update_owner', enc([IDL.Principal], [l.newOwner]));
+    await l.via(rawId, 'admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]));
+    await l.send('accept_ownership', none, l.newOwner);
     for (const [method, arg] of [
       ['update_archive_controllers', none],
       ['upgradeArchive', enc([IDL.Bool], [true])],
@@ -384,26 +405,33 @@ describe('archive administration: one call writes one owner', () => {
   let archives: Principal[];
   beforeAll(async () => {
     l = await Ledger.create({ kind: 'list', list: [Ledger.configured] });
-    archives = await l.growArchives(2);
+    archives = await l.growArchives(3, 70);
   }, 300_000);
   afterAll(async () => { await l.tearDown(); });
 
-  // The owner is read once, before the first `await`. A hand-off that runs while
-  // the call is suspended must not reach the archives it has not written yet.
-  // The hand-off is enqueued behind the update by a caller canister, so the
-  // ledger runs it at the update's first `await` (between the first
-  // `update_settings` and the second); re-reading `owner` per archive writes the
-  // new owner from the second archive on, which this test catches.
+  // The owner is read once, before the first `await`. A hand-off that completes
+  // while the call is suspended must not reach the archives it has not written
+  // yet. The owner is a caller canister and so is the proposed principal: in
+  // one message the first sends the update to the ledger and asks the second
+  // to accept, so the acceptance reaches the ledger while the update is
+  // suspended at an `update_settings`. Re-reading `owner` per archive writes
+  // the new owner to the archives that follow, which this test catches.
   it('a hand-off during the call leaves every archive of that call with the owner that sent it', async () => {
-    expect(archives.length).toBeGreaterThanOrEqual(2);
+    expect(archives.length).toBeGreaterThanOrEqual(3);
     const callerId = await l.installCaller(INTERLEAVE_CALLER_WASM_PATH);
-    await l.send('admin_update_owner', enc([IDL.Principal], [callerId]), l.installer);
+    const nextId = await l.installCaller(INTERLEAVE_CALLER_WASM_PATH);
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[callerId]]), l.installer);
+    await l.pic.updateCall({ canisterId: callerId, method: 'accept', sender: l.installer, arg: IDL.encode([IDL.Principal], [l.id]) });
+    await l.pic.updateCall({
+      canisterId: callerId, method: 'propose', sender: l.installer,
+      arg: IDL.encode([IDL.Principal, IDL.Principal], [l.id, nextId]),
+    });
 
     const reply = await l.pic.updateCall({
       canisterId: callerId,
       method: 'update_then_hand_off',
       sender: l.installer,
-      arg: IDL.encode([IDL.Principal, IDL.Principal], [l.id, l.newOwner]),
+      arg: IDL.encode([IDL.Principal, IDL.Principal], [l.id, nextId]),
     });
     const results = IDL.decode([IDL.Vec(ArchiveControllersResult)], reply)[0] as unknown as Result[];
 
@@ -413,7 +441,14 @@ describe('archive administration: one call writes one owner', () => {
       expect(sorted((r.result as { Ok: Principal[] }).Ok), r.canister_id.toText()).toEqual(want);
       expect(await l.controllersOf(r.canister_id), r.canister_id.toText()).toEqual(want);
     }
-    // The hand-off did land: the new owner now administers, the caller does not.
-    await expect(l.updateArchiveControllers(l.newOwner)).resolves.toHaveLength(archives.length);
+    // The hand-off did land, and the acceptance answered before the update
+    // did: the caller canister records each answer as it arrives. That the
+    // acceptance landed before the LAST archive was written is what the
+    // mutation of this rule shows: re-reading `owner` per archive fails here.
+    const owner = IDL.decode([IDL.Principal], await l.pic.queryCall({ canisterId: l.id, method: 'get_owner', arg: none }))[0] as Principal;
+    expect(owner.toText()).toBe(nextId.toText());
+    const order = IDL.decode([IDL.Vec(IDL.Text)], await l.pic.queryCall({ canisterId: callerId, method: 'order', arg: none }))[0];
+    expect(order).toEqual(['accepted', 'updated']);
+    await expect(l.send('update_archive_controllers', none, callerId)).rejects.toThrow(REFUSED);
   });
 });

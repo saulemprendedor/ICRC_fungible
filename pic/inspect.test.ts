@@ -449,6 +449,12 @@ class Ledger {
     return rawId;
   }
 
+  /** The two steps of a hand-off between identities: `from` proposes, `to` accepts. */
+  async handOff(to: Principal, from: Principal = this.installer) {
+    await this.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[to]]), from);
+    await this.send('accept_ownership', enc([], []), to);
+  }
+
   /** The owner-gated methods, each with a small valid argument that changes nothing that matters. */
   ownerMethods(nextOwner: Principal): Array<[string, Uint8Array]> {
     return [
@@ -463,7 +469,8 @@ class Ledger {
       ['upgradeArchive', enc([IDL.Bool], [true])],
       ['update_archive_controllers', enc([], [])],
       ['getUpgradeError', enc([], [])], // a read, refused at ingress to all but the owner
-      ['admin_update_owner', enc([IDL.Principal], [nextOwner])], // last: it hands the ledger to `nextOwner`
+      // Last: it proposes `nextOwner`, which must not be the sender that gets through.
+      ['admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[nextOwner]])],
     ];
   }
 }
@@ -779,9 +786,16 @@ describe('inspect: caller class', () => {
   });
 
   it('after a hand-off the new owner administers and the installer does not', async () => {
-    await l.send('admin_update_owner', enc([IDL.Principal], [l.newOwner]), l.installer);
+    // A proposal alone: the proposed principal is still a stranger to every owner method.
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    for (const [method, arg] of l.ownerMethods(l.stranger)) {
+      await expect(l.send(method, arg, l.newOwner), `${method} from the pending principal`).rejects.toThrow(REFUSED);
+    }
+    await expect(l.send('admin_update_icrc1', logoRequest(110_214), l.newOwner)).rejects.toThrow(REFUSED);
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    await l.send('accept_ownership', enc([], []), l.newOwner);
 
-    for (const [method, arg] of l.ownerMethods(l.newOwner)) {
+    for (const [method, arg] of l.ownerMethods(l.stranger)) {
       await expect(l.send(method, arg, l.installer), `${method} from the installer`).rejects.toThrow(REFUSED);
       await expect(l.send(method, arg, l.newOwner), `${method} from the new owner`).resolves.toBeDefined();
     }
@@ -813,7 +827,7 @@ describe('inspect: caller class', () => {
     await expect(l.send('getUpgradeError', none, l.installer)).resolves.toBeDefined();
 
     // The archive methods go with the hand-off; admin_init follows the owner as well.
-    await l.send('admin_update_owner', enc([IDL.Principal], [l.newOwner]), l.installer);
+    await l.handOff(l.newOwner);
     for (const method of ['update_archive_controllers', 'getUpgradeError']) {
       await expect(l.send(method, none, l.installer), `${method} from the installer`).rejects.toThrow(REFUSED);
       await expect(l.send(method, none, l.newOwner), `${method} from the new owner`).resolves.toBeDefined();
@@ -822,6 +836,47 @@ describe('inspect: caller class', () => {
     await expect(l.send('upgradeArchive', override, l.newOwner)).resolves.toBeDefined();
     await expect(l.send('admin_init', none, l.newOwner)).resolves.toBeDefined(); // not a controller
     await expect(l.send('admin_init', none, l.stranger)).rejects.toThrow(REFUSED);
+  });
+
+  it('accept_ownership is admitted for the pending principal alone, and for nobody with nothing pending', async () => {
+    const none = enc([], []);
+    const everyone = [l.stranger, l.anonymous, l.controller, l.installer, l.newOwner];
+
+    // Nothing pending: the arm is closed, to the owner as well.
+    let spent = await l.spent(async () => {
+      for (const sender of everyone) {
+        await expect(l.send('accept_ownership', none, sender), `nothing pending, from ${sender.toText()}`).rejects.toThrow(REFUSED);
+      }
+    });
+    expect(spent).toBeLessThan(1_000_000n);
+
+    // Cancelled: closed again.
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[]]), l.installer);
+    await expect(l.send('accept_ownership', none, l.newOwner)).rejects.toThrow(REFUSED);
+
+    // Pending: everyone but the proposed principal is refused, and pays nothing.
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    spent = await l.spent(async () => {
+      for (const sender of [l.stranger, l.anonymous, l.controller, l.installer]) {
+        await expect(l.send('accept_ownership', none, sender), `pending, from ${sender.toText()}`).rejects.toThrow(REFUSED);
+      }
+    });
+    expect(spent).toBeLessThan(1_000_000n);
+    expect(IDL.decode([IDL.Principal], await l.query('get_owner', none))[0].toText()).toBe(l.installer.toText());
+
+    // Positive control: the proposed principal is admitted, pays, and owns.
+    expect(await l.spent(() => l.send('accept_ownership', none, l.newOwner))).toBeGreaterThanOrEqual(5_000_000n);
+    expect(IDL.decode([IDL.Principal], await l.query('get_owner', none))[0].toText()).toBe(l.newOwner.toText());
+    expect(IDL.decode([IDL.Opt(IDL.Principal)], await l.query('get_pending_owner', none))[0]).toEqual([]);
+  });
+
+  it('the two hand-off methods are held to the default size limit', async () => {
+    const propose = encodeExactly([IDL.Opt(IDL.Principal)], [[l.newOwner]], DEFAULT_ARG_CAP + 1);
+    await expect(l.send('admin_propose_owner', propose, l.installer)).rejects.toThrow(REFUSED);
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    await expect(l.send('accept_ownership', encodeExactly([], [], DEFAULT_ARG_CAP + 1), l.newOwner)).rejects.toThrow(REFUSED);
+    await expect(l.send('accept_ownership', encodeExactly([], [], DEFAULT_ARG_CAP), l.newOwner)).resolves.toBeDefined();
   });
 
   it('upgrading the canister grants no archive method', async () => {
@@ -860,7 +915,11 @@ describe('inspect: caller class', () => {
         arg: IDL.encode([IDL.Principal, IDL.Text, IDL.Vec(IDL.Nat8)], [l.id, method, arg]),
       });
 
-    for (const [method, arg] of l.ownerMethods(l.stranger)) {
+    // `accept_ownership` with a hand-off pending for somebody else: the caller
+    // canister is not the pending principal.
+    await l.send('admin_propose_owner', enc([IDL.Opt(IDL.Principal)], [[l.newOwner]]), l.installer);
+    const gated: Array<[string, Uint8Array]> = [...l.ownerMethods(l.stranger), ['accept_ownership', enc([], [])]];
+    for (const [method, arg] of gated) {
       if (method === 'icrc107_set_fee_collector') {
         const reply = IDL.decode([IDL.Vec(IDL.Nat8)], await via(method, arg))[0] as Uint8Array;
         const Result = IDL.Variant({ Ok: IDL.Nat, Err: IDL.Variant({ AccessDenied: IDL.Text }) });
@@ -873,8 +932,11 @@ describe('inspect: caller class', () => {
         expect(failure!.message, method).toMatch(/Unauthorized/);
       }
     }
-    // Nothing changed hands: the installer is still the owner.
+    // Nothing changed hands: the installer is still the owner, and its proposal stands.
     await expect(l.send('admin_update_icrc2', enc([IDL.Vec(Icrc2InfoRequest)], [[]]), l.installer)).resolves.toBeDefined();
+    expect(IDL.decode([IDL.Principal], await l.query('get_owner', enc([], [])))[0].toText()).toBe(l.installer.toText());
+    expect((IDL.decode([IDL.Opt(IDL.Principal)], await l.query('get_pending_owner', enc([], [])))[0] as Principal[])[0].toText())
+      .toBe(l.newOwner.toText());
   });
 });
 
@@ -901,7 +963,7 @@ describe('inspect: reads sent as update calls', () => {
           'icrc3_get_tip_certificate', 'icrc3_supported_block_types', 'get_tip', 'archives',
           'icrc4_maximum_update_batch_size', 'icrc4_maximum_query_batch_size', 'icrc106_get_index_principal',
           'icrc107_get_fee_collector', 'get_icrc85_stats', 'get_index_canister', 'get_data_certificate',
-          'is_ledger_ready', 'get_health',
+          'is_ledger_ready', 'get_health', 'get_owner', 'get_pending_owner',
         ].map((method): [string, Uint8Array] => [method, none]),
         ['icrc3_get_blocks', enc([GetBlocksArgs], [[{ start: 0n, length: 10n }]])],
         // The largest request the field validation admits: 100 ranges with a 40-digit start.

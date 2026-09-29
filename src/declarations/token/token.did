@@ -204,7 +204,9 @@ type Transaction =
  };
 type Token = 
  service {
+   accept_ownership: () -> ();
    admin_init: () -> ();
+   admin_propose_owner: (proposed: opt principal) -> ();
    /// Configure the index canister for push notifications
    /// Set to null to disable notifications
    admin_set_index_canister: ("principal": opt principal) -> (bool);
@@ -213,7 +215,6 @@ type Token =
    admin_update_icrc2: (requests: vec UpdateLedgerInfoRequest__1) ->
     (vec bool);
    admin_update_icrc4: (requests: vec UpdateLedgerInfoRequest) -> (vec bool);
-   admin_update_owner: (new_owner: principal) -> (bool);
    archives: () -> (vec LegacyArchiveInfo);
    burn: (args: BurnArgs) -> (TransferResult);
    deposit_cycles: () -> ();
@@ -237,6 +238,8 @@ type Token =
      }) query;
    /// Get the currently configured index canister
    get_index_canister: () -> (opt principal) query;
+   get_owner: () -> (principal) query;
+   get_pending_owner: () -> (opt principal) query;
    get_tip: () -> (Tip) query;
    get_transactions: (args: record {
                               length: nat;

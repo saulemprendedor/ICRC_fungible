@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The owner of the ledger changes in two steps** (`src/Token.mo`, `src/token-mixin.mo`).
+  `admin_propose_owner(?Principal)`, by the owner, names a successor; `accept_ownership()`, by
+  that principal, completes the hand-off. Nothing moves until the proposed principal accepts, so
+  a mistyped principal, or one nobody holds the key of, cannot take the administration with it.
+  `null` cancels a proposal and a new proposal replaces the pending one. The anonymous principal
+  and the current owner are refused as proposals, and the anonymous caller is refused by both
+  methods.
+- New queries `get_owner` and `get_pending_owner`.
+- New stable field `pending_owner : ?Principal`. Upgrading is a plain upgrade. Going BACK to a
+  build without the field is not: the compiler refuses to drop it (M0169).
+- In `src/Token.mo` the ingress filter admits `accept_ownership` for the pending principal
+  alone, and for nobody while nothing is pending.
+
+### What the hand-off does not do
+
+- A proposal does not expire. A principal proposed long ago can accept at any later time,
+  until the owner cancels or replaces the proposal.
+- It does not move the archives that exist: the former owner stays among their controllers
+  until the new owner runs `update_archive_controllers`.
+- It does not move the minting account, which is set at install and changed with
+  `admin_update_icrc1`.
+- It does not repair a ledger whose owner is ALREADY the anonymous principal, which the
+  one-step method allowed. There, every other owner method still answers the anonymous caller,
+  and `admin_propose_owner` refuses it, so the ownership cannot be moved by a call: a controller
+  has to fix it with an upgrade. Read `get_owner` before relying on this release.
+
+### Removed
+
+- **`admin_update_owner`** from `src/Token.mo` and `src/token-mixin.mo`. It handed the ledger
+  over in one call and accepted any principal, the anonymous one included. **Breaking** for a
+  caller of that method: use the two steps above.
+
+### Known follow-up
+
+- `src/snstest.mo`, `src/examples/*` and the test fixture `pic/TokenWithICRC85.mo` still expose
+  the one-step `admin_update_owner`. They are separate actors and were left as they are; a
+  consumer that deploys one of them keeps the hazard described above.
+- The committed declarations (`src/declarations/token/*`, `test/devefi_patches/motoko_ledger.idl.*`)
+  were edited for the methods of this change only. They already differed from what the compiler
+  emits for `src/Token.mo` (`get_health` is missing, `icrc21_canister_call_consent_message` is
+  not marked as a query, the `icrc3` init section is not optional).
+
 ## [0.2.1] - 2026-03-14
 
 ### Updates

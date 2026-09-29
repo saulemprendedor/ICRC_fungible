@@ -542,7 +542,9 @@ export const idlFactory = ({ IDL }) => {
     'canister_id' : IDL.Principal,
   });
   const Token = IDL.Service({
+    'accept_ownership' : IDL.Func([], [], []),
     'admin_init' : IDL.Func([], [], []),
+    'admin_propose_owner' : IDL.Func([IDL.Opt(IDL.Principal)], [], []),
     'admin_set_index_canister' : IDL.Func(
         [IDL.Opt(IDL.Principal)],
         [IDL.Bool],
@@ -563,7 +565,6 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(IDL.Bool)],
         [],
       ),
-    'admin_update_owner' : IDL.Func([IDL.Principal], [IDL.Bool], []),
     'archives' : IDL.Func([], [IDL.Vec(LegacyArchiveInfo)], []),
     'burn' : IDL.Func([BurnArgs], [TransferResult], []),
     'deposit_cycles' : IDL.Func([], [], []),
@@ -595,6 +596,8 @@ export const idlFactory = ({ IDL }) => {
         ['query'],
       ),
     'get_index_canister' : IDL.Func([], [IDL.Opt(IDL.Principal)], ['query']),
+    'get_owner' : IDL.Func([], [IDL.Principal], ['query']),
+    'get_pending_owner' : IDL.Func([], [IDL.Opt(IDL.Principal)], ['query']),
     'get_tip' : IDL.Func([], [Tip], ['query']),
     'get_transactions' : IDL.Func(
         [IDL.Record({ 'start' : IDL.Nat, 'length' : IDL.Nat })],
