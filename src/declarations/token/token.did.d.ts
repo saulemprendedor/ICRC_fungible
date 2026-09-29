@@ -7,6 +7,11 @@ export interface ArchiveControllersResult {
     { 'Err' : string },
   'canister_id' : Principal,
 }
+export interface ArchiveUpgradeResult {
+  'result' : { 'Ok' : null } |
+    { 'Err' : string },
+  'canister_id' : Principal,
+}
 export interface Account {
   'owner' : Principal,
   'subaccount' : [] | [Subaccount],
@@ -438,7 +443,7 @@ export interface Token {
     [],
     Array<ArchiveControllersResult>
   >,
-  'upgradeArchive' : ActorMethod<[boolean], undefined>,
+  'upgradeArchive' : ActorMethod<[boolean], Array<ArchiveUpgradeResult>>,
 }
 export interface Transaction {
   'burn' : [] | [Burn],

@@ -541,6 +541,10 @@ export const idlFactory = ({ IDL }) => {
     'result' : IDL.Variant({ 'Ok' : IDL.Vec(IDL.Principal), 'Err' : IDL.Text }),
     'canister_id' : IDL.Principal,
   });
+  const ArchiveUpgradeResult = IDL.Record({
+    'result' : IDL.Variant({ 'Ok' : IDL.Null, 'Err' : IDL.Text }),
+    'canister_id' : IDL.Principal,
+  });
   const Token = IDL.Service({
     'accept_ownership' : IDL.Func([], [], []),
     'admin_init' : IDL.Func([], [], []),
@@ -701,7 +705,7 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(ArchiveControllersResult)],
         [],
       ),
-    'upgradeArchive' : IDL.Func([IDL.Bool], [], []),
+    'upgradeArchive' : IDL.Func([IDL.Bool], [IDL.Vec(ArchiveUpgradeResult)], []),
   });
   return Token;
 };
