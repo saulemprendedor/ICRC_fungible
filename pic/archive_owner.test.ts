@@ -441,9 +441,10 @@ describe('archive administration: one call writes one owner', () => {
       expect(sorted((r.result as { Ok: Principal[] }).Ok), r.canister_id.toText()).toEqual(want);
       expect(await l.controllersOf(r.canister_id), r.canister_id.toText()).toEqual(want);
     }
-    // The hand-off did land, and it landed DURING the call: the caller canister
-    // reports the owner it read right after the acceptance, before the update
-    // had answered.
+    // The hand-off did land, and the acceptance answered before the update
+    // did: the caller canister records each answer as it arrives. That the
+    // acceptance landed before the LAST archive was written is what the
+    // mutation of this rule shows: re-reading `owner` per archive fails here.
     const owner = IDL.decode([IDL.Principal], await l.pic.queryCall({ canisterId: l.id, method: 'get_owner', arg: none }))[0] as Principal;
     expect(owner.toText()).toBe(nextId.toText());
     const order = IDL.decode([IDL.Vec(IDL.Text)], await l.pic.queryCall({ canisterId: callerId, method: 'order', arg: none }))[0];

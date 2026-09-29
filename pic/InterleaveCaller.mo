@@ -23,7 +23,10 @@ persistent actor class InterleaveCaller() {
   };
   type Peer = actor { accept : Principal -> async () };
 
-  /// What came back, in the order it came back.
+  /// What answered, in the order it answered. Each call is wrapped in a
+  /// function of this canister that records the answer when it arrives, and
+  /// both wrappers are started before either is awaited, so the order is the
+  /// order of the replies and not the order of the `await`s below.
   let events = List.empty<Text>();
 
   public query func order() : async [Text] { List.toArray(events) };
@@ -44,14 +47,23 @@ persistent actor class InterleaveCaller() {
   /// instance of this canister, already proposed) sent before the first is
   /// awaited. Returns the results of the first call.
   public shared func update_then_hand_off(ledger : Principal, next : Principal) : async [ArchiveControllersResult] {
-    let l : Ledger = actor (Principal.toText(ledger));
-    let peer : Peer = actor (Principal.toText(next));
-    let update = l.update_archive_controllers();
-    let handOff = peer.accept(ledger);
-    await handOff;
-    List.add(events, "accepted");
+    let update = updateAndRecord(ledger);
+    let handOff = acceptAndRecord(ledger, next);
     let results = await update;
+    await handOff;
+    results;
+  };
+
+  func updateAndRecord(ledger : Principal) : async [ArchiveControllersResult] {
+    let l : Ledger = actor (Principal.toText(ledger));
+    let results = await l.update_archive_controllers();
     List.add(events, "updated");
     results;
+  };
+
+  func acceptAndRecord(ledger : Principal, next : Principal) : async () {
+    let peer : Peer = actor (Principal.toText(next));
+    await peer.accept(ledger);
+    List.add(events, "accepted");
   };
 };
