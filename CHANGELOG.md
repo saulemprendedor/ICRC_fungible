@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without checking `max_supply`: the other mint paths go through `validate_request`, this one does
   not. It needs an approval given by the minting account, so it is closed when the minting account
   is the ledger itself. Not fixed here (upstream package).
+- The allowlist examples add `_owner` to the allowlist in the actor body
+  (`src/examples/Allowlist.mo:568`, `src/examples/AllowlistInterface.mo:184`:
+  `Set.add(allowlist, Principal.compare, _owner)`). The actor body runs again on an upgrade, where
+  `_owner` is whoever upgrades, so every principal that upgrades the canister is added to the
+  allowlist and stays there until the owner removes it with `admin_update_allowlist`. It was
+  there before the two-step hand-off and is not fixed here. Read from the code, not measured by a
+  test: the examples have no query that lists the allowlist.
 
 ### Changed
 
@@ -133,8 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changing anything. They now persist `owner`, set at install.
 - New stable field `pending_owner : ?Principal` in all six, and `owner : Principal` in the two
   `*Interface.mo` examples. Upgrading is a plain upgrade.
-- Not changed: in `AllowlistInterface.mo` the allowlist is still seeded from `_owner`, and a
-  hand-off does not edit the allowlist. `LottoInterface.mo` has no owner method besides the
+- Not changed: in `Allowlist.mo` and `AllowlistInterface.mo` the allowlist is still seeded from
+  `_owner` (see Known issues), and a hand-off does not edit the allowlist. `LottoInterface.mo` has no owner method besides the
   hand-off. None of these actors has the supply lock.
 - `pic/build-token-wasm.sh` builds the examples and `src/snstest.mo` too, for
   `pic/examples_handoff.test.ts`.
