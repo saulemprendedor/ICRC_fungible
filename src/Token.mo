@@ -199,7 +199,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     ///
     /// What it does NOT do:
     ///  - It is irreversible in this code only. A controller can upgrade the
-    ///    canister to a wasm without it, or reinstall it, and the lock is gone.
+    ///    canister to a wasm that keeps this field and ignores it, or reinstall
+    ///    it, and the lock is gone. (A wasm that drops the field is refused by
+    ///    the runtime: a stable field cannot disappear in an upgrade.)
     ///  - It does not close the ICRC paths. When the minting account is an
     ///    account somebody can sign for, an `icrc1_transfer`, an
     ///    `icrc2_transfer_from` (after an approval by that account) or an

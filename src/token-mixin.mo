@@ -102,8 +102,8 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
 
   var _init = false;
   // Set for good by `admin_lock_supply`; see `src/Token.mo` for what it does
-  // not close (an upgrade removes it; transfers from a minting account somebody
-  // holds still mint).
+  // not close (an upgrade to a wasm that ignores it, a reinstall; transfers from
+  // a minting account somebody holds still mint).
   var supplyLocked : Bool = false;
 
   // Index notification state
