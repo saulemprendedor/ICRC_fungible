@@ -46,14 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   touches either setting, is refused at ingress once locked; `admin_lock_supply` is admitted for
   the owner only. The mixin has no ingress filter; its method bodies refuse.
 - New stable field `supplyLocked : Bool`, initialised to `false`. Upgrading is a plain upgrade and
-  the ledger starts unlocked. Going BACK to a release without the field drops it: the ledger comes
-  out unlocked.
+  the ledger starts unlocked. Going BACK to a release without the field is refused by the Motoko
+  runtime (enhanced orthogonal persistence traps in `post_upgrade` when a stable field disappears):
+  measured on a local replica, the ledger stays on the new wasm and stays locked.
 
 ### What the supply lock does not do
 
-- **It is irreversible in this code only.** A controller can upgrade the canister to a wasm without
-  the lock (or with an unlock), or reinstall it, and the lock is gone. It is as strong as the keys
-  of the canister's controllers.
+- **It is irreversible in this code only.** A controller can upgrade the canister to a wasm that
+  keeps the field and ignores it (or clears it), or reinstall it, and the lock is gone. It is as
+  strong as the keys of the canister's controllers.
+- **It freezes what can be minted, not how it is displayed.** `Decimals` and `Metadata` stay
+  editable: a change of decimals redenominates every balance in wallets and explorers, and a
+  metadata key can claim any figure. Neither moves a balance.
 - **It does not close the ICRC transfer paths.** If the minting account is an account somebody can
   sign for, an `icrc1_transfer`, an `icrc2_transfer_from` (after that account's approval) or an
   `icrc4_transfer_batch` from it is still recorded as a mint after the lock. Set the minting

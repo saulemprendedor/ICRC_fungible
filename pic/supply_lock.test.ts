@@ -323,6 +323,9 @@ for (const variant of VARIANTS) {
     });
 
     it('refuses a batch with the minting account or the maximum supply whole, whatever the value', async () => {
+      // A cap set before the lock: `max_supply` has no getter, so the frozen value is read back
+      // through the one path that still mints (the minting account's own transfer).
+      await l.via(raw, 'admin_update_icrc1', batch([{ MaxSupply: [1_000n] }]));
       await l.via(raw, 'admin_lock_supply', none);
       const before = await l.snapshot();
       const refused: [string, Req[]][] = [
@@ -337,6 +340,9 @@ for (const variant of VARIANTS) {
         await l.expectBodyTrap(l.via(raw, 'admin_update_icrc1', batch(requests)), LOCKED_UPDATE, why);
         await l.expectUnchanged(before, `after ${why}`);
       }
+      const over = decodeTransfer(await l.via(raw, 'icrc1_transfer', transferArgs(l.alice, 1_001n)));
+      expect('Err' in over && over.Err.GenericError.error_code, 'the cap is still 1 000').toBe(6n);
+      expect('Ok' in decodeTransfer(await l.via(raw, 'icrc1_transfer', transferArgs(l.alice, 1_000n))), 'and not lower').toBe(true);
     });
 
     it('keeps every other setting editable after the lock', async () => {
