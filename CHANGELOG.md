@@ -60,9 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owner methods refuse the anonymous caller. The way out is for an authenticated controller to
   remove the anonymous principal from the controllers and reinstall, which loses the state. Read
   `get_owner` and `icrc1_minting_account` before relying on a ledger.
-- The install check covers `src/Token.mo` and `src/token-mixin.mo`. `src/snstest.mo`, the actors
-  under `src/examples/` and the test fixture `pic/TokenWithICRC85.mo` keep their own constructors
-  and do not have it.
+- The install check covers `src/Token.mo` and `src/token-mixin.mo`. The test fixture
+  `pic/TokenWithICRC85.mo` keeps its own constructor and does not have it.
 - `admin_init` admits the owner or a controller that is not the anonymous principal. In
   `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
   a change for an authenticated stranger calling it (it only marks the ledger initialised).
@@ -100,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `icrc4_transfer_batch` from it is still recorded as a mint after the lock. Set the minting
   account to the ledger's own principal before locking, so that nobody can sign for it; the lock
   then keeps it there. The library does not check this: a deployer must.
-- `src/snstest.mo`, `src/examples/*` and the `pic/TokenWithICRC85.mo` fixture have no lock.
+- The `pic/TokenWithICRC85.mo` fixture has no lock.
 
 ### Fixed
 
@@ -108,16 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   results, marked the upgrade complete even when every archive failed, and `getUpgradeError`
   answered `""`. A ledger that ran it on an earlier build keeps that completion across the
   upgrade: run `upgradeArchive(true)` once after upgrading and read every entry.
-
-### Known issues
-
-- The allowlist examples add `_owner` to the allowlist in the actor body
-  (`src/examples/Allowlist.mo:568`, `src/examples/AllowlistInterface.mo:184`:
-  `Set.add(allowlist, Principal.compare, _owner)`). The actor body runs again on an upgrade, where
-  `_owner` is whoever upgrades, so every principal that upgrades the canister is added to the
-  allowlist and stays there until the owner removes it with `admin_update_allowlist`. It was
-  there before the two-step hand-off and is not fixed here. Read from the code, not measured by a
-  test: the examples have no query that lists the allowlist.
 
 ### Changed
 
@@ -159,33 +148,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the ownership cannot be moved by a call: a controller has to fix it with a reinstall. Read
   `get_owner` before relying on this release.
 
-### Examples moved to the two-step hand-off
-
-- `src/snstest.mo`, `src/examples/Lotto.mo`, `src/examples/Allowlist.mo`,
-  `src/examples/LottoInterface.mo`, `src/examples/AllowlistInterface.mo` and the test fixture
-  `pic/TokenWithICRC85.mo` now carry `admin_propose_owner(?Principal)`, `accept_ownership()`,
-  `get_owner` and `get_pending_owner`, with the rules of `src/Token.mo`. Their one-step
-  `admin_update_owner` is removed: **breaking** for a caller of that method.
-- Their owner methods go through the same `isOwner` predicate, so they refuse the anonymous
-  caller whatever `owner` holds. None of them has an ingress filter: the method bodies refuse.
-- `LottoInterface.mo` and `AllowlistInterface.mo` compared the caller with the class argument
-  `_owner` and kept no owner of their own, and their `admin_update_owner` answered `true` without
-  changing anything. They now persist `owner`, set at install.
-- New stable field `pending_owner : ?Principal` in all six, and `owner : Principal` in the two
-  `*Interface.mo` examples. Upgrading is a plain upgrade.
-- Not changed: in `Allowlist.mo` and `AllowlistInterface.mo` the allowlist is still seeded from
-  `_owner` (see Known issues), and a hand-off does not edit the allowlist. `LottoInterface.mo` has no owner method besides the
-  hand-off. None of these actors has the supply lock.
-- `pic/build-token-wasm.sh` builds the examples and `src/snstest.mo` too, for
-  `pic/examples_handoff.test.ts`.
-- The committed declarations of the fixture (`src/declarations/token_icrc85/*`) were edited for
-  these methods only.
-
 ### Removed
 
 - **`admin_update_owner`** from `src/Token.mo` and `src/token-mixin.mo`. It handed the ledger
   over in one call and accepted any principal, the anonymous one included. **Breaking** for a
   caller of that method: use the two steps above.
+- **The example canisters and the SNS variant**: `src/examples/` (`Lotto.mo`, `Allowlist.mo`,
+  `LottoInterface.mo`, `AllowlistInterface.mo`, `utils/ICPService.mo`), `src/snstest.mo` and
+  `src/sns_types.mo`, with their `dfx.json` entries and their targets in
+  `pic/build-token-wasm.sh`. The issue of the allowlist examples, which added every upgrader to
+  the allowlist, goes with them. The test fixture `pic/TokenWithICRC85.mo` stays; its
+  owner hand-off is now tested by `pic/icrc85_fixture_handoff.test.ts`.
 
 ### Known follow-up
 
