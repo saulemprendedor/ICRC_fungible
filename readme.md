@@ -9,8 +9,6 @@ This project is focused on the development and implementation of a fungible toke
 - `runners/test_deploy.sh`: Script for testing or deploying the token system.
 - `runners/prod_deploy.sh`: Script for deploying to production token system.
 - `src/Token.mo`: Source code for the token system written in Motoko.
-- `src/examples/Allowlist.mo`: Source code for the a token who is limited to an allow list of users who can send tokens, but anyone can receive them. See the source file for more information.
-- `src/examples/Lotto.mo`: Source code for a token where whenever you burn tokens you have a chance to double your tokens. See the source file for more information.
 
 ## Setup and Installation
 1. **Environment Setup**: Ensure you have an environment that supports Motoko programming. This typically involves setting up the [DFINITY Internet Computer SDK](https://internetcomputer.org/docs/current/references/cli-reference/dfx-parent) and [mops tool chain](https://docs.mops.one/quick-start).
