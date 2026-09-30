@@ -62,6 +62,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_owner` and `icrc1_minting_account` before relying on a ledger.
 - The install check covers `src/Token.mo` and `src/token-mixin.mo`. The test fixture
   `pic/TokenWithICRC85.mo` keeps its own constructor and does not have it.
+- **The decimals never change after install** (`src/Token.mo`, `src/token-mixin.mo`). A change of
+  decimals redenominates every balance, fee and amount already recorded, in every wallet, index
+  and explorer that reads them. `admin_update_icrc1` now traps (`"Decimals cannot change after
+  install"`), and applies nothing, when its batch carries a `Decimals` request, whatever its value
+  (the current one included) and whether the supply is locked or not. `inspect` in `Token.mo`
+  refuses the same batch at ingress. The init args still set the decimals at install and
+  reinstall and, in `src/token-mixin.mo`, at an upgrade that comes before the ICRC-1 state is
+  built (the same rule as the minting account above): no balance or block exists yet to be read
+  with other decimals. A `Metadata` request for `icrc1:decimals` does not change them either: the
+  ledger rewrites that entry from its state after every update. **Breaking** for a script that
+  re-sends `Decimals` with the rest of the ledger info. The test fixture `pic/TokenWithICRC85.mo`
+  does not have this check.
+- **Known limit, not changed: the fee collector and the initial balances accept an account owned
+  by the anonymous principal.** The `fee_collector` init arg, an `admin_update_icrc1`
+  `FeeCollector` request, `icrc107_set_fee_collector` and the `existing_balances` advanced setting
+  do not check the account's owner. Anybody signs for the anonymous principal, so anybody can
+  spend what such an account holds: every fee collected, or the balance given to it at install.
+  The library leaves this to the deployer, who must not set such an account. Read
+  `icrc107_get_fee_collector` and the initial balances before relying on a ledger. See the
+  deployer checklist in `readme.md`.
 - `admin_init` admits the owner or a controller that is not the anonymous principal. In
   `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
   a change for an authenticated stranger calling it (it only marks the ledger initialised).
@@ -91,9 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **It is irreversible in this code only.** A controller can upgrade the canister to a wasm that
   keeps the field and ignores it (or clears it), or reinstall it, and the lock is gone. It is as
   strong as the keys of the canister's controllers.
-- **It freezes what can be minted, not how it is displayed.** `Decimals` and `Metadata` stay
-  editable: a change of decimals redenominates every balance in wallets and explorers, and a
-  metadata key can claim any figure. Neither moves a balance.
+- **It freezes what can be minted, not how it is displayed.** `Metadata` stays editable, and a
+  metadata key can claim any figure; it moves no balance. (`Decimals` cannot change after
+  install, lock or no lock: see Security above.)
 - **It does not close the ICRC transfer paths.** If the minting account is an account somebody can
   sign for, an `icrc1_transfer`, an `icrc2_transfer_from` (after that account's approval) or an
   `icrc4_transfer_batch` from it is still recorded as a mint after the lock. Set the minting

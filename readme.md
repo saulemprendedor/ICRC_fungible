@@ -20,6 +20,16 @@ This project is focused on the development and implementation of a fungible toke
 - **Testing and Deployment**: Use `runners/test_deploy.sh` for deploying the token system to a test or development environment. This script may need modifications to fit your deployment process.
 - **Production Deployment**: Use `runners/prod_deploy.sh` for deploying the token system to a main net environment. This script will need modifications to fit your deployment process.
 
+## Deployer checklist
+The ledger refuses some mistakes; others are left to the deployer. Before relying on a ledger:
+- **Install with an authenticated identity.** The installer is the first owner and a controller; the anonymous principal is refused.
+- **Give the minting account an owner nobody can sign for** (the ledger's own principal) before `admin_lock_supply`. A transfer from the minting account is a mint, locked or not. The anonymous principal is refused as its owner.
+- **Never set the fee collector or an initial balance to an account owned by the anonymous principal.** The `fee_collector` init arg, a `FeeCollector` request to `admin_update_icrc1`, `icrc107_set_fee_collector` and `existing_balances` accept one, and anybody can spend what it holds. Check `icrc107_get_fee_collector` after every change.
+- **Choose the decimals at install.** They never change afterwards: `admin_update_icrc1` refuses a `Decimals` request.
+- **`admin_lock_supply` is irreversible** in this code: nothing mints after it, the owner included.
+
+See `CHANGELOG.md` for what each of these checks covers and what it does not.
+
 ## Dependencies
 - DFX and Mops
 - Additional dependencies are listed in `mops.toml`. Ensure they are properly installed and configured.
