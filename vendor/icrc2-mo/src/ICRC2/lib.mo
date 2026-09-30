@@ -754,6 +754,24 @@ module {
         if(calculated_fee + transfer.amount > balance){
           return (#ok(#Err(#InsufficientFunds({balance = balance}))), null);
         };
+      } else {
+        // LOCAL PATCH (transfer_from mint cap): a mint through transfer_from respects
+        // max_supply, with the error icrc1's validate_request gives for a #mint.
+        // `remaining` is clamped to 0 when the minted supply is already past the cap,
+        // where icrc1 would trap on the subtraction.
+        switch(environment.icrc1.max_supply()){
+          case(?max_supply){
+            let minted = environment.icrc1.minted_supply();
+            if(minted + transfer.amount > max_supply){
+              let remaining : Nat = if(max_supply > minted) max_supply - minted else 0;
+              return (#ok(#Err(#GenericError({
+                error_code = 6;
+                message = "Cannot mint more than " # Nat.toText(remaining) # " tokens";
+              }))), null);
+            };
+          };
+          case(null){};
+        };
       };
 
       debug if(debug_channel.transfer) D.print("about to validate approval for " # debug_show(transfer.from) # " -> " # debug_show(transfer.to) # " (" # debug_show(Map.size(state.token_approvals)) # " total approvals)");

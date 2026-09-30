@@ -164,6 +164,67 @@ without sending it.
 **Tests**: `pic/icrc85_off.test.ts` ("a new archive is controlled by the owner
 read after it exists"); the limit, `pic/archive_upgrade_results.test.ts`.
 
+## `icrc2-mo` — fork of 0.2.1
+
+Copied unpatched from the registry first (its own commit; every file matches its
+`mops.lock` hash), so the patch below reads as its own diff. No other dependency
+imports `icrc2-mo`, so there is one copy: `mops sources | grep icrc2-mo` must
+print `vendor/icrc2-mo/src`. The fork's own `mops.toml` still names
+`icrc1-mo = "0.2.1"`; the root override resolves it to `vendor/icrc1-mo`.
+
+**Upstream**: https://github.com/icdevsorg/icrc2.mo — drop the patch once a
+release contains it, and the fork with it (back to `icrc2-mo = "<version>"`).
+
+### Patch: transfer_from mints respect max_supply
+
+**Where**: `src/ICRC2/lib.mo`, `validate_transfer_from`, the `else` of the
+`if (not from_is_minting)` balance check (`LOCAL PATCH (transfer_from mint cap)`).
+
+**Bug**: an `icrc2_transfer_from` whose `from` is the minting account is a mint.
+Upstream skips the balance check for it, puts nothing in its place, and
+`transfer_token` credits the tokens with `ICRC1.UtilsHelper.mint_balance`, which
+does not look at `max_supply`. `icrc1_transfer` and `icrc4_transfer_batch` cap
+mints in icrc1's `validate_request` (`#mint` case); `icrc2_transfer_from` did
+not, so a ledger with a `max_supply` could be minted past it by the minting
+account itself (self transfer_from needs no approval) or by a spender it
+approved.
+
+**Fix**: when `max_supply` is set and `minted_supply + amount > max_supply`, the
+call is refused with the error icrc1 gives for a mint:
+`GenericError { error_code = 6; message = "Cannot mint more than <remaining> tokens" }`.
+It reads icrc1's public `max_supply()` and `minted_supply()`, the state icrc1's
+own check reads. It does not call `validate_request`: its `#mint` case also
+checks the fee against the fee icrc1 uses for mints (0), while icrc2 validates a
+transfer_from mint's fee against the ledger fee; calling it would change that.
+
+`validate_transfer_from` runs before the `canTransferFrom` hook and again after
+it, so the cap is checked on both sides: a hook that changes the amount, or a
+mint that lands while an async hook is awaited, is caught before
+`mint_balance`. The refusal is a reply, not a trap; it happens before the
+allowance is consumed, so nothing changes. It comes where `InsufficientFunds`
+comes for a normal transfer, before the allowance, fee and time checks.
+
+**Behaviour change**: with `max_supply` set, a transfer_from mint past the cap is
+refused (code 6) where it used to mint. `max_supply = null` is unchanged. The
+fee and allowance handling of a transfer_from mint is unchanged: the fee is
+validated against the ledger fee and not charged, the allowance is reduced by
+`amount + fee`.
+
+**Known limit, not patched**: when the minted supply is already past
+`max_supply` (a `MaxSupply` lowered below it, or a ledger over-minted through
+this bug before the fork), `remaining` is clamped to 0 here, so transfer_from
+answers `Cannot mint more than 0 tokens`. icrc1's own check computes
+`max_supply - minted` as a `Nat` and traps in that state, so `icrc1_transfer`
+and `icrc4_transfer_batch` mints trap instead of replying. Either way nothing is
+minted.
+
+**Regression test**: `pic/transfer_from_max_supply.test.ts` (build the wasm first
+with `bash pic/build-token-wasm.sh`). Red against 0.2.1, green against this fork;
+`TOKEN_WASM=<path>` points it at any build. It also checks that
+`icrc1_transfer` gives the same error and that `icrc4_transfer_batch` caps item
+by item (icrc4-mo is not affected and is not forked), and pins the known limit
+above (`icrc1_transfer` traps, minting nothing).
+
 ## `mops.lock` caveat (mops CLI 2.13.1)
 
 When mops first resolves a local-path dependency it writes an **absolute** path
