@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A mint through `icrc2_transfer_from` respects `max_supply`** (`vendor/icrc2-mo`, a local fork
+  of icrc2-mo 0.2.1). A transfer_from whose `from` is the minting account is a mint, and upstream
+  credited it without checking `max_supply`: the minting account (no approval needed for its own
+  transfer_from) or a spender it approved could mint past the cap. It is now refused with the error
+  `icrc1_transfer` gives, `GenericError { error_code = 6; message = "Cannot mint more than <n>
+  tokens" }`, and nothing changes. Ledgers without a `max_supply` are unaffected.
+  `icrc4_transfer_batch` already capped each item. This does not remove tokens minted past the cap
+  before the fix, and `admin_lock_supply` still does not block the ICRC paths: it freezes
+  `max_supply`, which now caps all three. Known limit, not fixed: once the minted supply is past
+  `max_supply`, `icrc1_transfer` and `icrc4_transfer_batch` mints trap on a subtraction instead of
+  replying (transfer_from replies `Cannot mint more than 0 tokens`); nothing is minted either way.
 - **The ledger refuses to be installed by the anonymous principal** (`src/Token.mo`,
   `src/token-mixin.mo`). The installer is the first owner and the owner of the default minting
   account, and it is a controller. An install or a reinstall sent by the anonymous principal now
