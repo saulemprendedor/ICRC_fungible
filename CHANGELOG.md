@@ -60,9 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owner methods refuse the anonymous caller. The way out is for an authenticated controller to
   remove the anonymous principal from the controllers and reinstall, which loses the state. Read
   `get_owner` and `icrc1_minting_account` before relying on a ledger.
-- The install check covers `src/Token.mo` and `src/token-mixin.mo`. `src/snstest.mo`, the actors
-  under `src/examples/` and the test fixture `pic/TokenWithICRC85.mo` keep their own constructors
-  and do not have it.
+- The install check covers `src/Token.mo` and `src/token-mixin.mo`. The test fixture
+  `pic/TokenWithICRC85.mo` keeps its own constructor and does not have it.
 - `admin_init` admits the owner or a controller that is not the anonymous principal. In
   `src/token-mixin.mo` it admitted every caller; it now has the same guard as `Token.mo`, which is
   a change for an authenticated stranger calling it (it only marks the ledger initialised).
@@ -100,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `icrc4_transfer_batch` from it is still recorded as a mint after the lock. Set the minting
   account to the ledger's own principal before locking, so that nobody can sign for it; the lock
   then keeps it there. The library does not check this: a deployer must.
-- `src/snstest.mo`, `src/examples/*` and the `pic/TokenWithICRC85.mo` fixture have no lock.
+- The `pic/TokenWithICRC85.mo` fixture has no lock.
 
 ### Fixed
 
@@ -157,9 +156,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The example canisters and the SNS variant**: `src/examples/` (`Lotto.mo`, `Allowlist.mo`,
   `LottoInterface.mo`, `AllowlistInterface.mo`, `utils/ICPService.mo`), `src/snstest.mo` and
   `src/sns_types.mo`, with their `dfx.json` entries and their targets in
-  `pic/build-token-wasm.sh`. The notes of this release that name them (the install check and the
-  supply lock) no longer apply to them, and the issue of the allowlist examples, which added every
-  upgrader to the allowlist, goes with them. The test fixture `pic/TokenWithICRC85.mo` stays; its
+  `pic/build-token-wasm.sh`. The issue of the allowlist examples, which added every upgrader to
+  the allowlist, goes with them. The test fixture `pic/TokenWithICRC85.mo` stays; its
   owner hand-off is now tested by `pic/icrc85_fixture_handoff.test.ts`.
 
 ### Known follow-up
