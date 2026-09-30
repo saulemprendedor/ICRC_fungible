@@ -244,7 +244,9 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   // the install or, if an upgrade comes before that, from that upgrade's args.
   // So the minting account is checked on every start that finds the state not
   // built yet, and never once it is built: an upgrade of a working ledger does
-  // not apply its init args, and is not refused for them.
+  // not apply its init args, and is not refused for them. The decimals come
+  // from the same args: such an early upgrade still sets them, as the install
+  // would have, since no balance or block exists yet to be read with others.
   switch(icrc1_migration_state) {
     case(#v0_0_0 _) refuseAnonymousMinter(icrc1_args.minting_account);
     case(_) {};
@@ -277,6 +279,13 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   // Any `#MintingAccount` or `#MaxSupply` in a ledger-info batch.
   func touchesSupply(r: [ICRC1.UpdateLedgerInfoRequest]) : Bool {
     for(x in r.vals()) { switch(x) { case(#MintingAccount _ or #MaxSupply _) return true; case(_) {} } };
+    false
+  };
+
+  // Any `#Decimals`: the init args set them at install and nothing changes them
+  // after, since every amount already recorded is read with them.
+  func touchesDecimals(r: [ICRC1.UpdateLedgerInfoRequest]) : Bool {
+    for(x in r.vals()) { switch(x) { case(#Decimals _) return true; case(_) {} } };
     false
   };
 
@@ -319,11 +328,13 @@ shared ({ caller = _owner }) persistent actor class Token(args: ?{
   };
   public query func get_owner() : async Principal { owner };
   public query func get_pending_owner() : async ?Principal { pending_owner };
-  // A batch that gives the minting account to the anonymous principal, or that
-  // touches the supply once locked, is refused whole, before any of it applies.
+  // A batch that gives the minting account to the anonymous principal, that
+  // changes the decimals, or that touches the supply once locked, is refused
+  // whole, before any of it applies.
   public shared({caller}) func admin_update_icrc1(r: [ICRC1.UpdateLedgerInfoRequest]) : async [Bool] {
     if(not isOwner(caller)) Runtime.trap("Unauthorized");
     if(setsAnonymousMinter(r)) Runtime.trap("The anonymous principal cannot be the owner of the minting account: anyone could mint");
+    if(touchesDecimals(r)) Runtime.trap("Decimals cannot change after install");
     if(supplyLocked and touchesSupply(r)) Runtime.trap("Supply is locked: MintingAccount and MaxSupply cannot change");
     icrc1().update_ledger_info(r)
   };
