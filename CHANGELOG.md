@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A mint through `icrc2_transfer_from` respects `max_supply`** (`vendor/icrc2-mo`, a local fork
   of icrc2-mo 0.2.1). A transfer_from whose `from` is the minting account is a mint, and upstream
   credited it without checking `max_supply`: the minting account (no approval needed for its own
-  transfer_from) or a spender it approved could mint past the cap. It is now refused with the error
+  transfer_from) or a spender it approved could mint past the cap. An approval by the minting
+  account only goes through with a zero fee (`icrc2_approve` charges the approver, and the minting
+  account never holds a balance). None of this is reachable when the minting account is the ledger
+  itself, since nobody signs for it. It is now refused with the error
   `icrc1_transfer` gives, `GenericError { error_code = 6; message = "Cannot mint more than <n>
   tokens" }`, and nothing changes. Ledgers without a `max_supply` are unaffected.
   `icrc4_transfer_batch` already capped each item. This does not remove tokens minted past the cap
@@ -108,10 +111,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 
-- `icrc2-mo` 0.2.1 credits a mint from `icrc2_transfer_from` (`from` = the minting account)
-  without checking `max_supply`: the other mint paths go through `validate_request`, this one does
-  not. It needs an approval given by the minting account, so it is closed when the minting account
-  is the ledger itself. Not fixed here (upstream package).
 - The allowlist examples add `_owner` to the allowlist in the actor body
   (`src/examples/Allowlist.mo:568`, `src/examples/AllowlistInterface.mo:184`:
   `Set.add(allowlist, Principal.compare, _owner)`). The actor body runs again on an upgrade, where
