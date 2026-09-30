@@ -146,7 +146,10 @@ describe('a mint through icrc2_transfer_from respects max_supply', () => {
   const setMaxSupply = async (cap: bigint | null) => {
     await update('admin_update_icrc1', enc([IDL.Vec(InfoRequest)], [[{ MaxSupply: cap === null ? [] : [cap] }]]), minter);
   };
-  /** Sets the cap `remaining` tokens above the minted supply. */
+  /**
+   * Sets the cap `remaining` tokens above the minted supply. The ledger has no getter for the
+   * minted supply; this reads the total supply, which equals it only while nothing was burned.
+   */
   const capAbove = async (remaining: bigint) => { await setMaxSupply((await supply()) + remaining); };
 
   const transferFrom = async (caller: Principal, amount: bigint): Promise<Result> =>
@@ -226,6 +229,26 @@ describe('a mint through icrc2_transfer_from respects max_supply', () => {
     expect(results[0]).toHaveProperty('Ok');
     expect(results[1]).toEqual({ Err: capError(0n) });
     expect(await transferFrom(minter, 1n), 'transfer_from after the batch filled the cap').toEqual({ Err: capError(0n) });
+  });
+
+  it('counts burned tokens as minted: burning does not make room under the cap', async () => {
+    // The cap is on the minted supply, as icrc1's check has it, not on the total supply
+    // (minted minus burned). A burn must not let the minting account mint the tokens again.
+    expect(await icrc1Mint(100_000n), 'a mint while uncapped').toHaveProperty('Ok');
+    const burn = IDL.decode([TransferResult], await update('icrc1_transfer', enc([TransferArgs], [{
+      from_subaccount: [], to: acct(minter), amount: 40_000n, fee: [], memo: [], created_at_time: [],
+    }]), alice))[0] as Result;
+    expect(burn, 'alice burns by sending to the minting account').toHaveProperty('Ok');
+    expect(await supply(), 'the total supply drops by the burn').toBe(60_000n);
+
+    await setMaxSupply(100_000n + 500n); // 100 000 minted, so 500 left
+    const before = await state();
+    expect(await transferFrom(minter, 501n)).toEqual({ Err: capError(500n) });
+    expect(await state(), 'a refused mint moves nothing').toEqual(before);
+    expect(await icrc1Mint(501n), 'icrc1_transfer counts the same way').toEqual({ Err: capError(500n) });
+
+    expect(await transferFrom(minter, 500n), 'at the cap').toHaveProperty('Ok');
+    expect(await transferFrom(minter, 1n)).toEqual({ Err: capError(0n) });
   });
 
   it('refuses with remaining 0, not a trap, once the minted supply is past the cap', async () => {
