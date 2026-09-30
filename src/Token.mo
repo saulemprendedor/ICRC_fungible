@@ -259,9 +259,11 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     ///  - It does not close the ICRC paths. When the minting account is an
     ///    account somebody can sign for, an `icrc1_transfer`, an
     ///    `icrc2_transfer_from` (after an approval by that account) or an
-    ///    `icrc4_transfer_batch` from it is still recorded as a mint. With the
-    ///    minting account set to this canister's own principal nobody can sign
-    ///    for it; this library does not check that, the deployer must.
+    ///    `icrc4_transfer_batch` from it is still recorded as a mint. All three
+    ///    are capped by `max_supply`, which the lock freezes, and none of them by
+    ///    the lock itself. With the minting account set to this canister's own
+    ///    principal nobody can sign for it; this library does not check that,
+    ///    the deployer must.
     var supplyLocked : Bool = false;
 
     /// Whether a ledger-info batch changes what can be minted. Pure: `inspect`
