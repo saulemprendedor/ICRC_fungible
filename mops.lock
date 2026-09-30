@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "mopsTomlDepsHash": "9c23a5a46cc975ba2fd6d2ab13b17a026683df5f3fc3f145894504895daa15d1",
+  "mopsTomlDepsHash": "0327f4ff9a1e23588e603f9ecbadacf161c61c66ee109d4457f7048e7fb25c47",
   "deps": {
     "core": "2.1.0",
     "icrc1-mo": "./vendor/icrc1-mo",
@@ -20,7 +20,7 @@
     "ovs-fixed": "0.2.2",
     "timer-tool": "0.2.1",
     "class-plus": "0.2.1",
-    "icrc2-mo": "0.2.1",
+    "icrc2-mo": "./vendor/icrc2-mo",
     "icrc3-mo": "./vendor/icrc3-mo",
     "ic-certification": "1.1.0",
     "sha2@0": "0.1.6",
@@ -333,26 +333,6 @@
       "class-plus@0.2.1/src/canisters/migratableExample_v2.mo": "7e73d0f2b58232521dde5244c07702c52086e1312c137e875d855f16e701fa20",
       "class-plus@0.2.1/src/canisters/migratableExampleMigration.mo": "495ce088afa8b51b84e64450ecab41228645cf9bf15db0a7137378337ac655fd",
       "class-plus@0.2.1/src/canisters/migratableExample_v2_post.mo": "48753f742a2dd429d881f81221801c5de6c50f802c17dcb916223efb5dc37cbb"
-    },
-    "icrc2-mo@0.2.1": {
-      "icrc2-mo@0.2.1/LICENSE": "f6c9bd23a5100627d02879ccd50c806bbf2610d9f7f42e3eb3188c048aa1ff14",
-      "icrc2-mo@0.2.1/README.md": "70876a5a8f0fae1b017c11325bfae6f7fa373d9e684e81d7c96279ca126475cc",
-      "icrc2-mo@0.2.1/mops.toml": "ee908b2d31a2204104390286973eaef2bc470b5459cf55e7765618bd51c6c463",
-      "icrc2-mo@0.2.1/src/ICRC2/lib.mo": "1a79f82a22458eb73dac6a5718725ab954820c10300d6398ad4720c6a29eb5b7",
-      "icrc2-mo@0.2.1/src/ICRC2/Interface.mo": "be0c0449e55bf7c57a12cd566037d7ef6bbb6c48a1180aa91051e203c2fff9bf",
-      "icrc2-mo@0.2.1/src/ICRC2/Inspect.mo": "bba82d3e6397db0eee006d300020c2399f1fc07f0cc63b5a56065d8e888cd04d",
-      "icrc2-mo@0.2.1/src/ICRC2/mixin.mo": "529badc0324c5dc2fdda124cc3186933ec6df4bbc8f2331a3d9b25eacb8d092b",
-      "icrc2-mo@0.2.1/src/ICRC2/Canisters/InterfaceTest.mo": "c774f71a7f2757cb26d4be8d0d741a55e98dec300da76197ecf70deae4f431f9",
-      "icrc2-mo@0.2.1/src/ICRC2/service.mo": "a1c7230318caaed44c5f73f6132327b3133a48108f0d6ec583156780f4ec9b55",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/lib.mo": "2763935fc55fc54ed6187ce0acd641138042e8fb18d4b4d9911e6fb2d37b42bf",
-      "icrc2-mo@0.2.1/src/ICRC2/Canisters/Token.mo": "7352fe02fa9500669ea1d435f3a40e383c4da10c9d68ba42cf4c24148ef75d7a",
-      "icrc2-mo@0.2.1/src/ICRC2/Canisters/IndexTest.mo": "f66b49581e340caa257c8a7c5cdd15eafb86d0c69da6fe328527242ac2bebfd3",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/v000_000_000/lib.mo": "61d00f036f9a59f0d0e01cd3af8694f77dcfe7dbf74a3201efd1dae55836e9de",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/types.mo": "8d2f5b188d8720476ab13bd027778b5dd99bec1f55b5de9bbfe27ffd8276aee5",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/v000_000_000/types.mo": "28428a053891813ceddb91fe97b9211eb820f3f78e379243f76dfe93a8f4548f",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/v000_002_000/lib.mo": "f3ea706f0dc19af2efbdb53bd66e01435caf03a51288ace84ab5ebd9898d6ee0",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/v000_001_000/types.mo": "d64c941da043a02b3a56095f8d48c1e8a404431aa13b01535a6375c30ed72ac9",
-      "icrc2-mo@0.2.1/src/ICRC2/migrations/v000_001_000/lib.mo": "31498c00cfb33c0ec7f83730f47772b1701b82fd66a195ed6542aa539d5bf4a8"
     },
     "ic-certification@1.1.0": {
       "ic-certification@1.1.0/mops.toml": "76f8225f74682d9d3321cde9a3a40652c3a0138b43a4e303c4afd97402b1d72f",
