@@ -59,8 +59,8 @@ fee = opt variant { Fixed = 10000000 }            # ❌ puede no aplicar
 ```
 src/
   Token.mo              ← persistent actor class principal (ICRC-1/2/3/4)
-  snstest.mo            ← variante para tests SNS
-  examples/             ← Lotto.mo, Allowlist.mo
+  token-mixin.mo        ← la misma API como mixin
+vendor/                 ← forks locales de icrc1-mo, icrc2-mo, icrc3-mo (ver vendor/README.md)
 runners/
   prod_deploy.sh        ← deploy mainnet con --mode install --args
   test_deploy.sh        ← deploy local con --args (icp deploy)
