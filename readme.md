@@ -26,7 +26,7 @@ The ledger refuses some mistakes; others are left to the deployer. Before relyin
 - **Give the minting account an owner nobody can sign for** (the ledger's own principal) before `admin_lock_supply`. A transfer from the minting account is a mint, locked or not. The anonymous principal is refused as its owner.
 - **Never set the fee collector or an initial balance to an account owned by the anonymous principal.** The `fee_collector` init arg, a `FeeCollector` request to `admin_update_icrc1`, `icrc107_set_fee_collector` and `existing_balances` accept one, and anybody can spend what it holds. Check `icrc107_get_fee_collector` after every change.
 - **Choose the decimals at install.** They never change afterwards: `admin_update_icrc1` refuses a `Decimals` request.
-- **`admin_lock_supply` is irreversible** in this code: nothing mints after it, the owner included.
+- **`admin_lock_supply` is irreversible** in this code: `mint` is refused after it, the owner included. The ICRC transfer paths from the minting account still mint unless nobody can sign for it (see above), within `max_supply` when one is set.
 
 See `CHANGELOG.md` for what each of these checks covers and what it does not.
 
