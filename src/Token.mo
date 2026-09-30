@@ -278,6 +278,21 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
       false
     };
 
+    /// Whether a ledger-info batch changes the decimals. The init args set them
+    /// at install and nothing changes them after: every balance, fee and amount
+    /// already recorded, and every wallet and index that cached them, is read
+    /// with them. Pure: `inspect` and the body of `admin_update_icrc1` share it,
+    /// so they cannot drift.
+    func touchesDecimals(requests : [ICRC1.UpdateLedgerInfoRequest]) : Bool {
+      for (request in requests.vals()) {
+        switch (request) {
+          case (#Decimals _) return true;
+          case (_) {};
+        };
+      };
+      false
+    };
+
     /// Whether a ledger-info batch sets a minting account that the anonymous
     /// principal signs for. Pure: `inspect` and the body of
     /// `admin_update_icrc1` share it, so they cannot drift.
@@ -992,15 +1007,17 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
         bounded(args.amount) and
         ICRC1Inspect.isValidMemo(args.memo, icrc1Config);
       };
-      // A batch that would give the minting account to the anonymous principal
-      // is refused whole, as the body refuses it. So is, once the supply is
-      // locked, a batch that touches the minting account or the maximum supply.
+      // A batch that would give the minting account to the anonymous principal,
+      // or that changes the decimals, is refused whole, as the body refuses it.
+      // So is, once the supply is locked, a batch that touches the minting
+      // account or the maximum supply.
       // The batch is decoded only for the owner, and `argCap` has already
       // bounded it.
       case (#admin_update_icrc1(getArgs)) {
         if (not isOwner(caller)) return false;
         let requests = getArgs();
-        not setsAnonymousMinter(requests) and (not supplyLocked or not touchesSupply(requests));
+        not setsAnonymousMinter(requests) and not touchesDecimals(requests)
+        and (not supplyLocked or not touchesSupply(requests));
       };
       case (
         #admin_update_icrc2 _ or #admin_update_icrc4 _
@@ -1457,6 +1474,9 @@ shared ({ caller = _owner }) persistent actor class Token  (args: ?{
     // answer a vector that reads like success.
     if(setsAnonymousMinter(requests)){
       Runtime.trap("The anonymous principal cannot be the owner of the minting account: anyone could mint");
+    };
+    if(touchesDecimals(requests)){
+      Runtime.trap("Decimals cannot change after install");
     };
     if(supplyLocked and touchesSupply(requests)){
       Runtime.trap("Supply is locked: MintingAccount and MaxSupply cannot change");
